@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Build output
+build/
+dist/
+*.spec.bak
+FurnitureBill.spec.bak
+
+# App data (never commit user data)
+data/
+*.db
+*.db-wal
+*.db-shm
+backups/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
