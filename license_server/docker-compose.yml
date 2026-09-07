@@ -1,0 +1,72 @@
+# Production deployment for the Furniture Bill license server.
+#
+#   docker compose up -d --build
+#
+# Create a release.env from release.env.example first and fill in secrets.
+# Caddy automatically provisions a TLS certificate for your domain.
+#
+# Exposed ports:
+#   80   -> Caddy HTTP (redirects to HTTPS)
+#   443  -> Caddy HTTPS -> app
+#   5432 -> PostgreSQL (internal only, not published)
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-license_server}
+      POSTGRES_USER: ${POSTGRES_USER:-license_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - license-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-license_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-license_user}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-license_server}
+      PRIVATE_SIGNING_KEY: ${PRIVATE_SIGNING_KEY}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD_HASH: ${ADMIN_PASSWORD_HASH}
+      SECRET_KEY: ${SECRET_KEY}
+      ENVIRONMENT: production
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - license-net
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN in release.env, e.g. license.yourdomain.com}
+    depends_on:
+      - app
+    networks:
+      - license-net
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:
+
+networks:
+  license-net:

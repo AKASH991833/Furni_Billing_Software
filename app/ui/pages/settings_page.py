@@ -7,13 +7,13 @@ from __future__ import annotations
 
 import shutil
 import uuid
-from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTime, QTimer
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -27,22 +27,25 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QSplitter,
     QTabWidget,
     QTextEdit,
+    QTimeEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from app.services import catalog_service, email_backup_service, license_service
 from app.services.backup_service import (
     create_backup,
     list_backups,
     restore_backup,
 )
 from app.services.business_service import get_profile, save_profile
-from app.services import catalog_service
 from app.ui.pages.base_page import BasePage
-from app.ui.widgets.common import card, primary_button, show_toast
+from app.ui.widgets.common import _dark_or_light, card, primary_button, show_toast
+from app.utils.area_icons import get_area_icon
 from app.utils.paths import data_dir
 
 
@@ -63,11 +66,30 @@ class SettingsPage(BasePage):
         outer.setContentsMargins(24, 20, 24, 20)
         outer.setSpacing(16)
 
-        tabs = QTabWidget()
-        tabs.addTab(self._business_tab(), "Business Profile")
-        tabs.addTab(self._areas_tab(), "Areas & Items")
-        tabs.addTab(self._backup_tab(), "Backup & Restore")
-        outer.addWidget(tabs)
+        self._tabs = QTabWidget()
+        self._tabs.addTab(self._business_tab(), "Business Profile")
+        self._tabs.addTab(self._areas_tab(), "Areas & Items")
+        self._tabs.addTab(self._invoice_numbering_tab(), "Invoice Numbering")
+        self._tabs.addTab(self._pdf_print_tab(), "PDF & Print")
+        self._tabs.addTab(self._security_tab(), "Security")
+        self._tabs.addTab(self._license_tab(), "License")
+        self._tabs.addTab(self._backup_tab(), "Backup & Restore")
+        outer.addWidget(self._tabs)
+
+    def switch_to_tab(self, name: str):
+        """Switch to a tab by keyword (e.g. 'security')."""
+        tab_map = {
+            "business": 0, "profile": 0,
+            "areas": 1, "items": 1,
+            "invoice": 2, "numbering": 2,
+            "pdf": 3, "print": 3,
+            "security": 4, "pin": 4, "password": 4,
+            "license": 5, "activation": 5, "licence": 5,
+            "backup": 6, "restore": 6,
+        }
+        idx = tab_map.get(name.lower(), -1)
+        if idx >= 0:
+            self._tabs.setCurrentIndex(idx)
 
     # ---------- Areas & Items tab ----------
     def _areas_tab(self) -> QWidget:
@@ -81,7 +103,7 @@ class SettingsPage(BasePage):
             "editor. Nothing is hardcoded \u2014 everything is stored in the database."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color:#6B7280;")
+        note.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')};")
         v.addWidget(note)
 
         split = QSplitter(Qt.Horizontal)
@@ -142,7 +164,8 @@ class SettingsPage(BasePage):
         self.area_list.clear()
         self._area_items = {}
         for a in catalog_service.list_areas():
-            li = QListWidgetItem(a.name)
+            icon = get_area_icon(a.name)
+            li = QListWidgetItem(f"{icon}  {a.name}")
             li.setData(Qt.UserRole, a.name)
             self.area_list.addItem(li)
             self._area_items[a.name] = a
@@ -288,7 +311,7 @@ class SettingsPage(BasePage):
         self.logo_label.setFixedSize(96, 96)
         self.logo_label.setAlignment(Qt.AlignCenter)
         self.logo_label.setStyleSheet(
-            "border: 1px dashed #CBD5E1; border-radius: 10px; background: #F8FAFC; color: #94A3B8; font-size:12px;"
+            f"border: 1px dashed {_dark_or_light('#374151', '#CBD5E1')}; border-radius: 10px; background: {_dark_or_light('#1F2937', '#F8FAFC')}; color: {_dark_or_light('#9CA3AF', '#94A3B8')}; font-size:12px;"
         )
         self.logo_label.setText("No logo")
         logo_btns = QVBoxLayout()
@@ -304,6 +327,38 @@ class SettingsPage(BasePage):
         logo_row.addStretch(1)
         logo_card.layout().addLayout(logo_row)
         v.addWidget(logo_card)
+
+        # Signature card
+        sig_card = card("Authorized Signature")
+        sig_note = QLabel(
+            "Upload a scanned signature image. It will appear on generated "
+            "invoices above the 'Authorized Signatory' line."
+        )
+        sig_note.setWordWrap(True)
+        sig_note.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')}; font-size: 12px;")
+        sig_card.layout().addWidget(sig_note)
+        sig_row = QHBoxLayout()
+        self.sig_label = QLabel()
+        self.sig_label.setFixedSize(160, 50)
+        self.sig_label.setAlignment(Qt.AlignCenter)
+        self.sig_label.setStyleSheet(
+            f"border: 1px dashed {_dark_or_light('#374151', '#CBD5E1')}; border-radius: 8px; background: {_dark_or_light('#1F2937', '#F8FAFC')};"
+            f" color: {_dark_or_light('#9CA3AF', '#94A3B8')}; font-size: 11px;"
+        )
+        self.sig_label.setText("No signature")
+        sig_btns = QVBoxLayout()
+        btn_upload_sig = primary_button("Upload Signature")
+        btn_upload_sig.clicked.connect(self._upload_signature)
+        btn_remove_sig = QPushButton("Remove Signature")
+        btn_remove_sig.clicked.connect(self._remove_signature)
+        sig_btns.addWidget(btn_upload_sig)
+        sig_btns.addWidget(btn_remove_sig)
+        sig_btns.addStretch(1)
+        sig_row.addWidget(self.sig_label)
+        sig_row.addLayout(sig_btns)
+        sig_row.addStretch(1)
+        sig_card.layout().addLayout(sig_row)
+        v.addWidget(sig_card)
 
         # Details card
         details_card = card("Business Details")
@@ -352,9 +407,65 @@ class SettingsPage(BasePage):
         form.addRow(_lab("Invoice Prefix"), self.f_invoice_prefix)
         form.addRow(_lab(""), self.cb_show_gst)
         form.addRow(_lab("Default GST Rate"), self.sp_gst_rate)
+
         form.addRow(_lab("Terms & Conditions"), self.f_terms)
         details_card.layout().addLayout(form)
         v.addWidget(details_card)
+
+        # ---- Invoice Defaults card ----
+        defaults_card = card("Invoice Defaults (Cell Formatting)")
+        desc = QLabel(
+            "Set the default font family, size, and style applied to all areas "
+            "and invoice cells. You can still override per-cell in the editor."
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')}; font-size: 12px;")
+        defaults_card.layout().addWidget(desc)
+
+        df = QFormLayout()
+        df.setVerticalSpacing(10)
+        df.setLabelAlignment(Qt.AlignRight)
+
+        self.f_default_font = QComboBox()
+        self.f_default_font.setEditable(False)
+        _fonts = (
+            "(System Default)", "Segoe UI", "Arial", "Times New Roman",
+            "Courier New", "Verdana", "Georgia", "Trebuchet MS",
+            "Comic Sans MS", "Impact", "Lucida Console",
+        )
+        self.f_default_font.addItems(_fonts)
+        self.f_default_font.setMinimumWidth(200)
+
+        self.sp_default_font_size = QSpinBox()
+        self.sp_default_font_size.setRange(8, 24)
+        self.sp_default_font_size.setValue(13)
+        self.sp_default_font_size.setSuffix(" px")
+
+        self.cb_default_bold = QCheckBox("Bold")
+        self.cb_default_underline = QCheckBox("Underline")
+
+        # Live preview label
+        self._preview_label = QLabel("Preview: Sample Cell Text")
+        self._preview_label.setStyleSheet(
+            f"border: 1px solid {_dark_or_light('#374151', '#E5E7EB')}; border-radius: 6px; padding: 8px 14px;"
+            f" background: {_dark_or_light('#1F2937', '#FAFBFC')}; font-size: 13px;"
+        )
+
+        df.addRow(_lab("Default Font"), self.f_default_font)
+        df.addRow(_lab("Default Size"), self.sp_default_font_size)
+        df.addRow(_lab("Style"), self._make_hbox(self.cb_default_bold, self.cb_default_underline))
+        df.addRow(_lab("Preview"), self._preview_label)
+        defaults_card.layout().addLayout(df)
+
+        # Live-update preview when any font setting changes
+        self.f_default_font.currentTextChanged.connect(self._update_font_preview)
+        self.sp_default_font_size.valueChanged.connect(self._update_font_preview)
+        self.cb_default_bold.toggled.connect(self._update_font_preview)
+        self.cb_default_underline.toggled.connect(self._update_font_preview)
+
+        v.addWidget(defaults_card)
+
+
 
         # Save
         save_btn = primary_button("Save Settings")
@@ -365,6 +476,237 @@ class SettingsPage(BasePage):
 
         scroll.setWidget(inner)
         return scroll
+
+    # ---------- Security tab ----------
+    def _security_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(16)
+
+        # Change PIN card
+        pin_card = card("Change Login PIN")
+        pin_desc = QLabel(
+            "Change the PIN used to login to the application. "
+            "PIN must be 4-6 digits."
+        )
+        pin_desc.setWordWrap(True)
+        pin_desc.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')}; font-size: 12px;")
+        pin_card.layout().addWidget(pin_desc)
+
+        from PySide6.QtWidgets import QLineEdit as _QLE
+
+        self.f_current_pin = _QLE()
+        self.f_current_pin.setEchoMode(_QLE.EchoMode.Password)
+        self.f_current_pin.setPlaceholderText("Current PIN")
+        self.f_current_pin.setMinimumHeight(38)
+
+        self.f_new_pin = _QLE()
+        self.f_new_pin.setEchoMode(_QLE.EchoMode.Password)
+        self.f_new_pin.setPlaceholderText("New PIN (4-6 digits)")
+        self.f_new_pin.setMaxLength(6)
+        self.f_new_pin.setMinimumHeight(38)
+
+        self.f_confirm_pin = _QLE()
+        self.f_confirm_pin.setEchoMode(_QLE.EchoMode.Password)
+        self.f_confirm_pin.setPlaceholderText("Confirm new PIN")
+        self.f_confirm_pin.setMaxLength(6)
+        self.f_confirm_pin.setMinimumHeight(38)
+
+        from PySide6.QtWidgets import QFormLayout as _QFL
+        pin_form = _QFL()
+        pin_form.setVerticalSpacing(10)
+        pin_form.setLabelAlignment(Qt.AlignRight)
+
+        def _lab(t):
+            l = QLabel(t)
+            l.setObjectName("fieldLabel")
+            return l
+
+        pin_form.addRow(_lab("Current PIN"), self.f_current_pin)
+        pin_form.addRow(_lab("New PIN"), self.f_new_pin)
+        pin_form.addRow(_lab("Confirm PIN"), self.f_confirm_pin)
+        pin_card.layout().addLayout(pin_form)
+
+        btn_change_pin = primary_button("Change PIN")
+        btn_change_pin.setFixedWidth(160)
+        btn_change_pin.clicked.connect(self._change_pin)
+        pin_card.layout().addWidget(btn_change_pin, alignment=Qt.AlignLeft)
+
+        v.addWidget(pin_card)
+
+        # Account info card
+        info_card = card("Account Info")
+        from app.services import auth_service
+        user = auth_service.current_user()
+        if user:
+            info = QLabel(f"Logged in as: <b>{user['full_name'] or user['username']}</b>")
+        else:
+            info = QLabel("Not logged in")
+        info.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#374151')}; font-size: 13px;")
+        info_card.layout().addWidget(info)
+        v.addWidget(info_card)
+
+        v.addStretch(1)
+        return w
+
+    def _change_pin(self):
+        current = self.f_current_pin.text().strip()
+        new = self.f_new_pin.text().strip()
+        confirm = self.f_confirm_pin.text().strip()
+
+        if not current or not new or not confirm:
+            show_toast(self, "All fields are required.", "error")
+            return
+
+        if new != confirm:
+            show_toast(self, "New PIN and confirmation do not match.", "error")
+            return
+
+        if len(new) < 4 or len(new) > 6:
+            show_toast(self, "PIN must be 4-6 digits.", "error")
+            return
+
+        if not new.isdigit():
+            show_toast(self, "PIN must contain only digits.", "error")
+            return
+
+        from app.services import auth_service
+        user = auth_service.current_user()
+        if not user:
+            show_toast(self, "Not logged in.", "error")
+            return
+
+        ok, msg = auth_service.change_pin(current, new)
+        if ok:
+            show_toast(self, msg, "success")
+            self.f_current_pin.clear()
+            self.f_new_pin.clear()
+            self.f_confirm_pin.clear()
+        else:
+            show_toast(self, msg, "error")
+
+    # ---------- License tab ----------
+    def _license_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(16)
+
+        status_card = card("License Status")
+        self.license_status_badge = QLabel("Checking...")
+        self.license_status_badge.setWordWrap(True)
+        self.license_status_badge.setStyleSheet(
+            f"font-size: 14px; font-weight: 700; color:{_dark_or_light('#9CA3AF', '#6B7280')};"
+        )
+        status_card.layout().addWidget(self.license_status_badge)
+        v.addWidget(status_card)
+
+        det_card = card("License Details")
+        det_form = QFormLayout()
+        det_form.setVerticalSpacing(10)
+        det_form.setLabelAlignment(Qt.AlignRight)
+        self.license_key_label = QLabel("-")
+        self.license_customer_label = QLabel("-")
+        self.license_machine_label = QLabel("-")
+        self.license_date_label = QLabel("-")
+        det_form.addRow(self._lic_field("License Key"), self.license_key_label)
+        det_form.addRow(self._lic_field("Registered To"), self.license_customer_label)
+        det_form.addRow(self._lic_field("Computer ID"), self.license_machine_label)
+        det_form.addRow(self._lic_field("Activated On"), self.license_date_label)
+        det_card.layout().addLayout(det_form)
+        v.addWidget(det_card)
+
+        act_card = card("Manage License")
+        act_note = QLabel(
+            "Deactivating releases this license key so it can be used on a new "
+            "computer. This computer will need the key again to reactivate."
+        )
+        act_note.setWordWrap(True)
+        act_note.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')}; font-size: 12px;")
+        act_card.layout().addWidget(act_note)
+        self.btn_deactivate_license = QPushButton("Deactivate This Computer")
+        self.btn_deactivate_license.setCursor(Qt.PointingHandCursor)
+        self.btn_deactivate_license.clicked.connect(self._deactivate_license)
+        act_card.layout().addWidget(
+            self.btn_deactivate_license, alignment=Qt.AlignLeft,
+        )
+        v.addWidget(act_card)
+
+        v.addStretch(1)
+        return w
+
+    @staticmethod
+    def _lic_field(text: str) -> QLabel:
+        l = QLabel(text)
+        l.setObjectName("fieldLabel")
+        return l
+
+    def _refresh_license_tab(self):
+        try:
+            status = license_service.get_license_status()
+            st = status["status"]
+            lic = status.get("licenses") or {}
+        except Exception:  # noqa: BLE001
+            self.license_status_badge.setText("Could not read license information.")
+            return
+
+        if st == license_service.STATUS_VALID:
+            self.license_status_badge.setText("\u2713  Activated \u2014 Lifetime License")
+            self.license_status_badge.setStyleSheet(
+                "font-size: 14px; font-weight: 700; color:#16A34A;"
+            )
+            self.btn_deactivate_license.setEnabled(True)
+        elif st == license_service.STATUS_NOT_ACTIVATED:
+            remaining = license_service.trial_remaining_days()
+            if remaining > 0:
+                text = f"Trial Mode \u2014 {remaining} day{'s' if remaining != 1 else ''} remaining"
+                color = "#F59E0B"
+            else:
+                text = "Not Activated"
+                color = "#EF4444"
+            self.license_status_badge.setText(text)
+            self.license_status_badge.setStyleSheet(
+                f"font-size: 14px; font-weight: 700; color:{color};"
+            )
+        elif st == license_service.STATUS_MACHINE_MISMATCH:
+            self.license_status_badge.setText(
+                "License belongs to a different computer."
+            )
+            self.license_status_badge.setStyleSheet(
+                "font-size: 14px; font-weight: 700; color:#EF4444;"
+            )
+        else:
+            self.license_status_badge.setText(
+                "License file is invalid or tampered. Contact support."
+            )
+            self.license_status_badge.setStyleSheet(
+                "font-size: 14px; font-weight: 700; color:#EF4444;"
+            )
+
+        self.license_key_label.setText(lic.get("license_key") or "-")
+        self.license_customer_label.setText(lic.get("customer_name") or "-")
+        self.license_machine_label.setText(lic.get("device_fingerprint") or "-")
+        self.license_date_label.setText((lic.get("activated_at") or "-")[:10])
+
+    def _deactivate_license(self):
+        confirm = QMessageBox.question(
+            self,
+            "Deactivate License",
+            "This will release the license key from this computer. "
+            "You will need the key to activate again. Continue?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        try:
+            license_service.deactivate_online()
+        except license_service.LicenseError as exc:
+            show_toast(self, str(exc), "error")
+            return
+        show_toast(self, "License deactivated.", "success")
+        self._refresh_license_tab()
 
     # ---------- Backup tab ----------
     def _backup_tab(self) -> QWidget:
@@ -379,7 +721,7 @@ class SettingsPage(BasePage):
             "settings, profile) into a single .db file. Store it somewhere safe."
         )
         note.setWordWrap(True)
-        note.setStyleSheet("color:#6B7280;")
+        note.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')};")
         btn_backup = primary_button("Create Backup Now")
         btn_backup.clicked.connect(self._do_backup)
         b_row.addWidget(note, 1)
@@ -394,7 +736,7 @@ class SettingsPage(BasePage):
             "close the database, then reopen. Make sure you have a backup."
         )
         rnote.setWordWrap(True)
-        rnote.setStyleSheet("color:#6B7280;")
+        rnote.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')};")
         btn_restore = QPushButton("Restore From File...")
         btn_restore.clicked.connect(self._do_restore)
         r_row.addWidget(rnote, 1)
@@ -405,11 +747,84 @@ class SettingsPage(BasePage):
         l_card = card("Available Backups")
         self.backup_list = QLabel("Loading...")
         self.backup_list.setWordWrap(True)
-        self.backup_list.setStyleSheet("color:#6B7280;")
+        self.backup_list.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')};")
         l_card.layout().addWidget(self.backup_list)
         v.addWidget(l_card)
+
+        e_card = card("Daily Email Backup")
+        self.cb_email_backup = QCheckBox("Send a backup email every day")
+        self.f_email_address = QLineEdit()
+        self.f_email_address.setPlaceholderText("you@gmail.com")
+        self.f_email_password = QLineEdit()
+        self.f_email_password.setPlaceholderText("16-character Gmail App Password")
+        self.f_email_password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.t_email_time = QTimeEdit()
+        self.t_email_time.setDisplayFormat("HH:mm")
+        self.t_email_time.setTime(QTime(19, 0))
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        form.addRow("", self.cb_email_backup)
+        form.addRow("Gmail address", self.f_email_address)
+        form.addRow("App password", self.f_email_password)
+        form.addRow("Time (daily)", self.t_email_time)
+        e_card.layout().addLayout(form)
+
+        pwd_note = QLabel(
+            "Use a Gmail App Password, not your normal Gmail password.\n"
+            "Create one at myaccount.google.com → Security → App passwords."
+        )
+        pwd_note.setWordWrap(True)
+        pwd_note.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')};")
+        e_card.layout().addWidget(pwd_note)
+
+        btn_row = QHBoxLayout()
+        self.btn_save_email = primary_button("Save Email Settings")
+        self.btn_save_email.clicked.connect(self._save_email_backup)
+        self.btn_test_email = QPushButton("Send Test Email")
+        self.btn_test_email.clicked.connect(self._send_test_email)
+        btn_row.addWidget(self.btn_save_email)
+        btn_row.addWidget(self.btn_test_email)
+        btn_row.addStretch(1)
+        e_card.layout().addLayout(btn_row)
+
+        self.l_email_status = QLabel("")
+        self.l_email_status.setWordWrap(True)
+        self.l_email_status.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')};")
+        e_card.layout().addWidget(self.l_email_status)
+        v.addWidget(e_card)
         v.addStretch(1)
         return w
+
+    # ---------- Invoice defaults helpers ----------
+    @staticmethod
+    def _make_hbox(*widgets):
+        """Create a horizontal layout with the given widgets."""
+        h = QHBoxLayout()
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(16)
+        for w in widgets:
+            h.addWidget(w)
+        h.addStretch(1)
+        return h
+
+    def _update_font_preview(self):
+        """Update the live preview label with the selected font settings."""
+        family = self.f_default_font.currentText()
+        size = self.sp_default_font_size.value()
+        bold = self.cb_default_bold.isChecked()
+        underline = self.cb_default_underline.isChecked()
+        parts = [f"font-size: {size}px;"]
+        if family and family != "(System Default)":
+            parts.append(f"font-family: '{family}';")
+        if bold:
+            parts.append("font-weight: bold;")
+        if underline:
+            parts.append("text-decoration: underline;")
+        self._preview_label.setStyleSheet(
+            f"border: 1px solid {_dark_or_light('#374151', '#E5E7EB')}; border-radius: 6px; padding: 8px 14px;"
+            f" background: {_dark_or_light('#1F2937', '#FAFBFC')}; {' '.join(parts)}"
+        )
 
     # ---------- Logo handling ----------
     def _upload_logo(self):
@@ -461,10 +876,26 @@ class SettingsPage(BasePage):
             "gstin": self.f_gstin.text().strip(),
             "invoice_prefix": self.f_invoice_prefix.text().strip() or "INV",
             "logo_path": self._logo_path_store,
+            "signature_path": self._signature_path_store,
             "terms_conditions": self.f_terms.toPlainText(),
             "show_gst": self.cb_show_gst.isChecked(),
             "default_gst_rate": self.sp_gst_rate.value(),
+            # Invoice cell formatting defaults
+            "default_font_family": self.f_default_font.currentText() if self.f_default_font.currentIndex() > 0 else "",
+            "default_font_size": self.sp_default_font_size.value(),
+            "default_font_bold": self.cb_default_bold.isChecked(),
+            "default_font_underline": self.cb_default_underline.isChecked(),
+            # Invoice numbering format
+            "invoice_format": self.f_invoice_format.text().strip() or "{PREFIX}-{SEQ}",
+            "invoice_sequence_digits": self.sp_seq_digits.value(),
+            "next_sequence_number": self.sp_next_seq.value(),
         }
+        # Validate business profile fields
+        from app.utils.validators import validate_business_profile
+        errors = validate_business_profile(data)
+        if errors:
+            show_toast(self, errors[0].message, "error")
+            return
         try:
             save_profile(data)
             show_toast(self, "Settings saved successfully.", "success")
@@ -477,7 +908,12 @@ class SettingsPage(BasePage):
     def on_first_show(self):
         self._load_profile()
         self.refresh_backups()
+        self._load_email_backup_ui()
         self._reload_areas()
+
+    def refresh(self):
+        self.on_first_show()
+        self._refresh_license_tab()
 
     def _load_profile(self):
         p = get_profile()
@@ -502,6 +938,19 @@ class SettingsPage(BasePage):
         except (TypeError, ValueError):
             self.sp_gst_rate.setValue(0)
 
+        # Load invoice cell formatting defaults
+        font_family = getattr(p, "default_font_family", "") or ""
+        if font_family:
+            idx = self.f_default_font.findText(font_family)
+            self.f_default_font.setCurrentIndex(max(idx, 0))
+        else:
+            self.f_default_font.setCurrentIndex(0)  # System Default
+        self.sp_default_font_size.setValue(int(getattr(p, "default_font_size", 13) or 13))
+        self.cb_default_bold.setChecked(bool(getattr(p, "default_font_bold", False)))
+        self.cb_default_underline.setChecked(bool(getattr(p, "default_font_underline", False)))
+        self._update_font_preview()
+
+        # Load logo
         self._logo_path_store = p.logo_path
         if p.logo_path and Path(p.logo_path).exists():
             pm = QPixmap(p.logo_path)
@@ -509,6 +958,44 @@ class SettingsPage(BasePage):
                 self.logo_label.setPixmap(
                     pm.scaled(96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation))
                 self.logo_label.setText("")
+
+        # Load signature
+        self._signature_path_store = getattr(p, "signature_path", None)
+        if self._signature_path_store and Path(self._signature_path_store).exists():
+            pm = QPixmap(self._signature_path_store)
+            if not pm.isNull():
+                self.sig_label.setPixmap(
+                    pm.scaled(150, 45, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                self.sig_label.setText("")
+
+        # Load invoice numbering format
+        self.f_invoice_format.setText(getattr(p, "invoice_format", "") or "")
+        self.sp_seq_digits.setValue(int(getattr(p, "invoice_sequence_digits", 4) or 4))
+        self.sp_next_seq.setValue(int(getattr(p, "next_sequence_number", 1) or 1))
+        self._update_seq_preview()
+
+        # Load PDF/print settings
+        # Theme
+        pdf_theme = getattr(p, "pdf_theme", "colour") or "colour"
+        for label, tname in self._theme_map.items():
+            if tname == pdf_theme:
+                idx = self.f_theme_selector.findText(label)
+                if idx >= 0:
+                    self.f_theme_selector.setCurrentIndex(idx)
+                    self._update_theme_preview(label)
+                break
+        # Paper & margins
+        paper_size = getattr(p, "pdf_paper_size", "A4") or "A4"
+        idx = self.f_paper_size.findText(paper_size)
+        self.f_paper_size.setCurrentIndex(max(idx, 0))
+        self.sp_margin_top.setValue(float(getattr(p, "pdf_margin_top", 15) or 15))
+        self.sp_margin_bottom.setValue(float(getattr(p, "pdf_margin_bottom", 15) or 15))
+        self.sp_margin_left.setValue(float(getattr(p, "pdf_margin_left", 15) or 15))
+        self.sp_margin_right.setValue(float(getattr(p, "pdf_margin_right", 15) or 15))
+        # Colors
+        self.f_primary_color.setText(getattr(p, "pdf_primary_color", "") or "")
+        self.f_secondary_color.setText(getattr(p, "pdf_secondary_color", "") or "")
+        self._update_color_preview()
 
     def _do_backup(self):
         try:
@@ -543,3 +1030,462 @@ class SettingsPage(BasePage):
             return
         lines = [f"{b.name}  ({b.stat().st_size//1024} KB)" for b in backups[:10]]
         self.backup_list.setText("\n".join(lines))
+
+    # ---------- Email backup handlers ----------
+    def _load_email_backup_ui(self):
+        cfg = email_backup_service.get_email_backup_config()
+        self.cb_email_backup.setChecked(cfg["enabled"])
+        self.f_email_address.setText(cfg["address"])
+        self.f_email_password.setText(cfg["password"])
+        if cfg["time"]:
+            parsed = email_backup_service._parse_time(cfg["time"])
+            if parsed:
+                self.t_email_time.setTime(QTime(parsed.hour, parsed.minute))
+        self._refresh_email_status()
+
+    def _refresh_email_status(self):
+        cfg = email_backup_service.get_email_backup_config()
+        if not cfg["enabled"]:
+            self.l_email_status.setText("Daily email backup is OFF.")
+        elif cfg["last_success"]:
+            self.l_email_status.setText(
+                f"Last backup sent: {cfg['last_success']}"
+                + (f"\nLast error: {cfg['last_error']}" if cfg["last_error"] else "")
+            )
+        else:
+            self.l_email_status.setText(
+                f"Waiting for {cfg['time']} daily (never sent yet)."
+                + (f"\nLast error: {cfg['last_error']}" if cfg["last_error"] else "")
+            )
+
+    def _save_email_backup(self):
+        address = self.f_email_address.text().strip()
+        password = self.f_email_password.text()
+        time_str = self.t_email_time.time().toString("HH:mm")
+        errors = email_backup_service.save_email_backup_config(
+            enabled=self.cb_email_backup.isChecked(),
+            address=address,
+            password=password,
+            time_str=time_str,
+        )
+        if errors:
+            for e in errors:
+                show_toast(self, e, "error")
+            return
+        show_toast(self, "Email backup settings saved.", "success")
+        self._refresh_email_status()
+
+    def _send_test_email(self):
+        address = self.f_email_address.text().strip()
+        password = self.f_email_password.text()
+        if not address or not password:
+            show_toast(self, "Enter your Gmail address and App Password first.", "error")
+            return
+        self.btn_test_email.setEnabled(False)
+        self.btn_test_email.setText("Sending...")
+        time_str = self.t_email_time.time().toString("HH:mm")
+
+        def _work():
+            try:
+                cfg = {
+                    "enabled": True,
+                    "address": address,
+                    "password": password,
+                    "time": time_str,
+                    "last_sent": "",
+                    "last_success": "",
+                    "last_error": "",
+                }
+                email_backup_service.send_email_backup(cfg, keep_local=False)
+                ok, err = True, ""
+            except Exception as exc:  # noqa: BLE001
+                ok, err = False, str(exc)
+
+            def _done():
+                self.btn_test_email.setEnabled(True)
+                self.btn_test_email.setText("Send Test Email")
+                if ok:
+                    show_toast(self, "Test backup email sent successfully.", "success")
+                else:
+                    show_toast(self, f"Test failed: {err}", "error")
+                self._refresh_email_status()
+
+            QTimer.singleShot(0, _done)
+
+        import threading
+        threading.Thread(target=_work, daemon=True).start()
+
+    # ---------- Signature handling ----------
+    def _upload_signature(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose Signature Image", "",
+            "Images (*.png *.jpg *.jpeg *.bmp)"
+        )
+        if not path:
+            return
+        dest_dir = data_dir() / "media"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        ext = Path(path).suffix or ".png"
+        dest = dest_dir / f"sig_{uuid.uuid4().hex}{ext}"
+        try:
+            shutil.copyfile(path, dest)
+        except OSError as e:
+            show_toast(self, f"Could not copy signature: {e}", "error")
+            return
+        self._signature_path_store = str(dest)
+        pm = QPixmap(str(dest))
+        if pm.isNull() or pm.width() <= 1:
+            self.sig_label.setText("Invalid image")
+        else:
+            self.sig_label.setText("")
+            self.sig_label.setPixmap(
+                pm.scaled(150, 45, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            )
+
+    def _remove_signature(self):
+        self._signature_path_store = None
+        self.sig_label.setText("No signature")
+        self.sig_label.setPixmap(QPixmap())
+
+    # ---------- Invoice Numbering tab ----------
+    def _invoice_numbering_tab(self) -> QWidget:
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(14)
+
+        # Format card
+        fmt_card = card("Invoice Number Format")
+        fmt_desc = QLabel(
+            "Configure how invoice numbers are generated. Use tokens: "
+            "{PREFIX} = invoice prefix, {SEQ} = sequence number, "
+            "{YEAR} = 4-digit year, {CUSTOMER} = customer slug.\n"
+            "Examples: {PREFIX}-{SEQ} → INV-0001, "
+            "{PREFIX}-{YEAR}-{SEQ} → INV-2026-0001, "
+            "{CUSTOMER}-{PREFIX}-{YEAR}-{SEQ} → Akash-INV-2026-001"
+        )
+        fmt_desc.setWordWrap(True)
+        fmt_desc.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')}; font-size: 12px;")
+        fmt_card.layout().addWidget(fmt_desc)
+
+        ff = QFormLayout()
+        ff.setVerticalSpacing(10)
+        ff.setLabelAlignment(Qt.AlignRight)
+
+        self.f_invoice_format = QLineEdit()
+        self.f_invoice_format.setPlaceholderText("e.g. {PREFIX}-{YEAR}-{SEQ}")
+        self.f_invoice_format.setMinimumWidth(300)
+
+        self.sp_seq_digits = QSpinBox()
+        self.sp_seq_digits.setRange(2, 8)
+        self.sp_seq_digits.setValue(4)
+        self.sp_seq_digits.setSuffix(" digits")
+
+        self.sp_next_seq = QSpinBox()
+        self.sp_next_seq.setRange(1, 999999)
+        self.sp_next_seq.setValue(1)
+        self.sp_next_seq.setSuffix(" (next invoice will start here)")
+
+        # Live preview
+        self._seq_preview = QLabel("")
+        self._seq_preview.setStyleSheet(
+            f"border: 1px solid {_dark_or_light('#374151', '#E5E7EB')}; border-radius: 6px; padding: 8px 14px;"
+            f" background: {_dark_or_light('#1F2937', '#FAFBFC')}; font-size: 13px; font-weight: 600; color: {_dark_or_light('#F9FAFB', '#173560')};"
+        )
+
+        def _lab(t):
+            l = QLabel(t)
+            l.setObjectName("fieldLabel")
+            return l
+
+        ff.addRow(_lab("Format Template"), self.f_invoice_format)
+        ff.addRow(_lab("Sequence Digits"), self.sp_seq_digits)
+        ff.addRow(_lab("Next Sequence Number"), self.sp_next_seq)
+        ff.addRow(_lab("Preview"), self._seq_preview)
+        fmt_card.layout().addLayout(ff)
+
+        # Live-update preview
+        self.f_invoice_format.textChanged.connect(self._update_seq_preview)
+        self.sp_seq_digits.valueChanged.connect(self._update_seq_preview)
+        self.sp_next_seq.valueChanged.connect(self._update_seq_preview)
+
+        v.addWidget(fmt_card)
+
+        # Reset card
+        reset_card = card("Reset Sequence")
+        reset_desc = QLabel(
+            "Reset the sequence counter back to the next number you specify. "
+            "Use this at the start of a new financial year."
+        )
+        reset_desc.setWordWrap(True)
+        reset_desc.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')}; font-size: 12px;")
+        reset_card.layout().addWidget(reset_desc)
+        v.addWidget(reset_card)
+
+        v.addStretch(1)
+        return w
+
+    def _update_seq_preview(self):
+        """Update the live preview of the invoice number format."""
+        fmt = self.f_invoice_format.text().strip() or "{PREFIX}-{SEQ}"
+        digits = self.sp_seq_digits.value()
+        seq = self.sp_next_seq.value()
+        seq_str = str(seq).zfill(digits)
+        from app.services.business_service import get_profile
+        profile = get_profile()
+        prefix = "INV"
+        if profile and profile.invoice_prefix:
+            prefix = profile.invoice_prefix.strip()
+        from datetime import datetime, timezone
+        year = datetime.now(tz=timezone.utc).date().year
+        result = fmt.replace("{PREFIX}", prefix)
+        result = result.replace("{SEQ}", seq_str)
+        result = result.replace("{YEAR}", str(year))
+        result = result.replace("{CUSTOMER}", "CustomerName")
+        self._seq_preview.setText(f"Example: {result}")
+
+    # ---------- PDF & Print tab ----------
+    def _pdf_print_tab(self) -> QWidget:
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        inner = QWidget()
+        v = QVBoxLayout(inner)
+        v.setContentsMargins(8, 8, 8, 8)
+        v.setSpacing(14)
+
+        # ---- Theme Selector card ----
+        from app.pdf.theme import THEMES
+        theme_card = card("Invoice Theme / Layout Style")
+        theme_desc = QLabel(
+            "Choose a visual theme for generated invoice PDFs. "
+            "Each theme has a unique colour palette and style. "
+            "You can further customize primary/secondary colors below."
+        )
+        theme_desc.setWordWrap(True)
+        theme_desc.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')}; font-size: 12px;")
+        theme_card.layout().addWidget(theme_desc)
+
+        # Theme combo
+        self.f_theme_selector = QComboBox()
+        self.f_theme_selector.setMinimumWidth(250)
+        self._theme_map = {}  # display_label -> theme_name
+        for tname, t in THEMES.items():
+            self.f_theme_selector.addItem(t.label)
+            self._theme_map[t.label] = tname
+
+        # Theme preview swatches (3 swatches per theme: primary, secondary, bg)
+        self._theme_preview_frame = QFrame()
+        self._theme_preview_frame.setStyleSheet(
+            f"QFrame {{ border: 1px solid {_dark_or_light('#374151', '#E5E7EB')}; border-radius: 8px; padding: 8px; background: {_dark_or_light('#1F2937', '#FAFBFC')}; }}"
+        )
+        self._theme_preview_layout = QHBoxLayout(self._theme_preview_frame)
+        self._theme_preview_layout.setContentsMargins(12, 8, 12, 8)
+        self._theme_preview_layout.setSpacing(12)
+
+        # Preview labels (will be populated on selection)
+        self._theme_swatches = []
+        for i in range(5):
+            sw = QLabel("  ")
+            sw.setFixedSize(40, 40)
+            sw.setStyleSheet(f"border: 1px solid {_dark_or_light('#374151', '#CBD5E1')}; border-radius: 6px; background: #ccc;")
+            self._theme_preview_layout.addWidget(sw)
+            self._theme_swatches.append(sw)
+
+        # Theme name label
+        self._theme_name_label = QLabel("")
+        self._theme_name_label.setStyleSheet(f"color:{_dark_or_light('#F9FAFB', '#374151')}; font-size: 12px; font-weight: 600;")
+        self._theme_preview_layout.addWidget(self._theme_name_label)
+        self._theme_preview_layout.addStretch(1)
+
+        # Connect live preview
+        self.f_theme_selector.currentTextChanged.connect(self._update_theme_preview)
+
+        tf = QFormLayout()
+        tf.setVerticalSpacing(10)
+        tf.setLabelAlignment(Qt.AlignRight)
+
+        def _lab(t):
+            l = QLabel(t)
+            l.setObjectName("fieldLabel")
+            return l
+
+        tf.addRow(_lab("Select Theme"), self.f_theme_selector)
+        tf.addRow(_lab("Preview"), self._theme_preview_frame)
+        theme_card.layout().addLayout(tf)
+
+        # Initial preview
+        self._update_theme_preview(self.f_theme_selector.currentText())
+
+        v.addWidget(theme_card)
+
+        # Paper & Margins card
+        paper_card = card("Paper Size & Margins")
+        paper_desc = QLabel(
+            "Configure the paper size and margins for generated PDF invoices. "
+            "Margins are in millimeters."
+        )
+        paper_desc.setWordWrap(True)
+        paper_desc.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')}; font-size: 12px;")
+        paper_card.layout().addWidget(paper_desc)
+
+        pf = QFormLayout()
+        pf.setVerticalSpacing(10)
+        pf.setLabelAlignment(Qt.AlignRight)
+
+        self.f_paper_size = QComboBox()
+        self.f_paper_size.addItems(["A4", "A5", "LETTER"])
+        self.f_paper_size.setMinimumWidth(150)
+
+        self.sp_margin_top = QDoubleSpinBox()
+        self.sp_margin_top.setRange(5, 40)
+        self.sp_margin_top.setValue(15)
+        self.sp_margin_top.setSuffix(" mm")
+
+        self.sp_margin_bottom = QDoubleSpinBox()
+        self.sp_margin_bottom.setRange(5, 40)
+        self.sp_margin_bottom.setValue(15)
+        self.sp_margin_bottom.setSuffix(" mm")
+
+        self.sp_margin_left = QDoubleSpinBox()
+        self.sp_margin_left.setRange(5, 40)
+        self.sp_margin_left.setValue(15)
+        self.sp_margin_left.setSuffix(" mm")
+
+        self.sp_margin_right = QDoubleSpinBox()
+        self.sp_margin_right.setRange(5, 40)
+        self.sp_margin_right.setValue(15)
+        self.sp_margin_right.setSuffix(" mm")
+
+        def _lab(t):
+            l = QLabel(t)
+            l.setObjectName("fieldLabel")
+            return l
+
+        pf.addRow(_lab("Paper Size"), self.f_paper_size)
+        pf.addRow(_lab("Top Margin"), self.sp_margin_top)
+        pf.addRow(_lab("Bottom Margin"), self.sp_margin_bottom)
+        pf.addRow(_lab("Left Margin"), self.sp_margin_left)
+        pf.addRow(_lab("Right Margin"), self.sp_margin_right)
+        paper_card.layout().addLayout(pf)
+        v.addWidget(paper_card)
+
+        # Color Customization card
+        color_card = card("Invoice Colors (Branding)")
+        color_desc = QLabel(
+            "Customize the primary and secondary colors used in generated invoices. "
+            "Leave empty to use the default navy & gold theme."
+        )
+        color_desc.setWordWrap(True)
+        color_desc.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')}; font-size: 12px;")
+        color_card.layout().addWidget(color_desc)
+
+        cf = QFormLayout()
+        cf.setVerticalSpacing(10)
+        cf.setLabelAlignment(Qt.AlignRight)
+
+        self.f_primary_color = QLineEdit()
+        self.f_primary_color.setPlaceholderText("e.g. #173560 (navy) — leave empty for default")
+        self.f_primary_color.setMinimumWidth(250)
+
+        self.f_secondary_color = QLineEdit()
+        self.f_secondary_color.setPlaceholderText("e.g. #C8A24B (gold) — leave empty for default")
+        self.f_secondary_color.setMinimumWidth(250)
+
+        # Color preview swatches
+        self._color_preview_primary = QLabel("  ")
+        self._color_preview_primary.setFixedSize(28, 28)
+        self._color_preview_primary.setStyleSheet(
+            f"border: 1px solid {_dark_or_light('#374151', '#CBD5E1')}; border-radius: 4px; background: #173560;"
+        )
+        self._color_preview_secondary = QLabel("  ")
+        self._color_preview_secondary.setFixedSize(28, 28)
+        self._color_preview_secondary.setStyleSheet(
+            f"border: 1px solid {_dark_or_light('#374151', '#CBD5E1')}; border-radius: 4px; background: #C8A24B;"
+        )
+
+        def _color_row(label_text, line_edit, swatch):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
+            row.addWidget(swatch)
+            row.addWidget(line_edit, 1)
+            return row
+
+        cf.addRow(_lab("Primary Color"), _color_row("", self.f_primary_color, self._color_preview_primary))
+        cf.addRow(_lab("Secondary Color"), _color_row("", self.f_secondary_color, self._color_preview_secondary))
+        color_card.layout().addLayout(cf)
+
+        # Live color preview update
+        self.f_primary_color.textChanged.connect(self._update_color_preview)
+        self.f_secondary_color.textChanged.connect(self._update_color_preview)
+
+        v.addWidget(color_card)
+
+        # Save button
+        save_btn_pdf = primary_button("Save PDF & Print Settings")
+        save_btn_pdf.setFixedWidth(250)
+        save_btn_pdf.clicked.connect(self._save_pdf_print)
+        v.addWidget(save_btn_pdf, alignment=Qt.AlignLeft)
+
+        v.addStretch(1)
+        scroll.setWidget(inner)
+        return scroll
+
+    def _update_theme_preview(self, label_text: str):
+        """Update the theme preview swatches when the user selects a theme."""
+        from app.pdf.theme import THEMES
+        theme_name = self._theme_map.get(label_text, "colour")
+        t = THEMES.get(theme_name)
+        if t is None:
+            return
+        colors = [t.navy, t.gold, t.grand_bg, t.thead_text if t.thead_text != '#ffffff' else t.gold_dark, t.heading_text]
+        labels = ["Primary", "Secondary", "Grand BG", "Accent", "Heading"]
+        for i, (sw, color) in enumerate(zip(self._theme_swatches, colors)):
+            sw.setStyleSheet(
+                f"border: 1px solid {_dark_or_light('#374151', '#CBD5E1')}; border-radius: 6px; background: {color};"
+            )
+            sw.setToolTip(f"{labels[i]}: {color}")
+        self._theme_name_label.setText(t.label)
+
+    def _update_color_preview(self):
+        """Update the color swatch previews live."""
+        primary = self.f_primary_color.text().strip()
+        if primary and len(primary) == 7 and primary.startswith("#"):
+            self._color_preview_primary.setStyleSheet(
+                f"border: 1px solid {_dark_or_light('#374151', '#CBD5E1')}; border-radius: 4px; background: {primary};"
+            )
+        else:
+            self._color_preview_primary.setStyleSheet(
+                f"border: 1px solid {_dark_or_light('#374151', '#CBD5E1')}; border-radius: 4px; background: #173560;"
+            )
+
+        secondary = self.f_secondary_color.text().strip()
+        if secondary and len(secondary) == 7 and secondary.startswith("#"):
+            self._color_preview_secondary.setStyleSheet(
+                f"border: 1px solid {_dark_or_light('#374151', '#CBD5E1')}; border-radius: 4px; background: {secondary};"
+            )
+        else:
+            self._color_preview_secondary.setStyleSheet(
+                f"border: 1px solid {_dark_or_light('#374151', '#CBD5E1')}; border-radius: 4px; background: #C8A24B;"
+            )
+
+    def _save_pdf_print(self):
+        """Save PDF/print settings (paper, margins, colors, theme) separately."""
+        theme_label = self.f_theme_selector.currentText()
+        theme_name = self._theme_map.get(theme_label, "colour")
+        data = {
+            "pdf_theme": theme_name,
+            "pdf_paper_size": self.f_paper_size.currentText(),
+            "pdf_margin_top": self.sp_margin_top.value(),
+            "pdf_margin_bottom": self.sp_margin_bottom.value(),
+            "pdf_margin_left": self.sp_margin_left.value(),
+            "pdf_margin_right": self.sp_margin_right.value(),
+            "pdf_primary_color": self.f_primary_color.text().strip(),
+            "pdf_secondary_color": self.f_secondary_color.text().strip(),
+        }
+        try:
+            save_profile(data)
+            show_toast(self, "PDF & Print settings saved.", "success")
+        except Exception as e:  # noqa: BLE001
+            show_toast(self, f"Failed to save: {e}", "error")

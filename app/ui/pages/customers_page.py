@@ -6,7 +6,6 @@ invoice and payment history.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -25,9 +24,8 @@ from PySide6.QtWidgets import (
 )
 
 from app.services import customer_service
-from app.services.invoice_service import invoice_status
 from app.ui.pages.base_page import BasePage
-from app.ui.widgets.common import card, empty_state, primary_button, show_toast
+from app.ui.widgets.common import _dark_or_light, card, primary_button, show_toast
 
 
 class CustomerDialog(QDialog):
@@ -96,12 +94,8 @@ class CustomerDialog(QDialog):
         v.addLayout(btns)
 
     def _save(self):
-        name = self.f_name.text().strip()
-        if not name:
-            show_toast(self, "Customer name is required.", "error")
-            return
-        self._data = {
-            "name": name,
+        data = {
+            "name": self.f_name.text().strip(),
             "mobile": self.f_mobile.text().strip(),
             "alternate_mobile": self.f_alt.text().strip(),
             "email": self.f_email.text().strip(),
@@ -111,6 +105,13 @@ class CustomerDialog(QDialog):
             "gstin": self.f_gstin.text().strip(),
             "notes": self.f_notes.toPlainText().strip(),
         }
+        # Validate input fields
+        from app.utils.validators import validate_customer
+        errors = validate_customer(data)
+        if errors:
+            show_toast(self, errors[0].message, "error")
+            return
+        self._data = data
         self.accept()
 
     def result_data(self) -> dict:
@@ -172,10 +173,10 @@ class CustomersPage(BasePage):
         self.d_name.setObjectName("cardTitle")
         self.d_contact = QLabel("")
         self.d_contact.setWordWrap(True)
-        self.d_contact.setStyleSheet("color:#6B7280;")
+        self.d_contact.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')};")
         self.d_address = QLabel("")
         self.d_address.setWordWrap(True)
-        self.d_address.setStyleSheet("color:#6B7280;")
+        self.d_address.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')};")
 
         self.d_invoiced = QLabel("")
         self.d_paid = QLabel("")

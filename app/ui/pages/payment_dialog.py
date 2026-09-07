@@ -1,8 +1,6 @@
 """Payment entry and history dialog."""
 from __future__ import annotations
 
-from datetime import date
-
 from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
     QComboBox,
@@ -123,6 +121,16 @@ class PaymentDialog(QDialog):
             return
         if amount <= 0:
             QMessageBox.warning(self, "Invalid amount", "Amount must be > 0.")
+            return
+        summary = payment_service.invoice_payment_summary(self.invoice.id)
+        outstanding = float(summary["outstanding"] or 0)
+        if amount > outstanding:
+            QMessageBox.warning(
+                self, "Overpayment",
+                f"Payment of \u20B9 {amount:,.2f} exceeds the outstanding "
+                f"balance of \u20B9 {outstanding:,.2f}. Please enter an "
+                "amount up to the outstanding balance.",
+            )
             return
         try:
             payment_service.add_payment(

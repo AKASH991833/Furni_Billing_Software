@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 venv/
 env/
+.pytest_cache/
 
 # Build output
 build/
@@ -26,3 +27,12 @@ Thumbs.db
 # IDE
 .idea/
 .vscode/
+
+# License server secrets (never commit)
+license_server/.env
+license_server/release.env
+license_server/*.pem
+license_server/data/
+# Logs
+*.log
+

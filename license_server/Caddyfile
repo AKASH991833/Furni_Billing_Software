@@ -1,0 +1,19 @@
+# Caddy reverse proxy with automatic HTTPS.
+# The admin UI is served at the root; the JSON API lives under the same host.
+
+{$APP_DOMAIN} {
+    encode zstd gzip
+
+    handle /admin/* {
+        # Same pool as below; admin routes are auth-gated in the app itself.
+        reverse_proxy app:8000
+    }
+
+    handle {
+        reverse_proxy app:8000
+    }
+
+    header {
+        -Server
+    }
+}

@@ -1,0 +1,9 @@
+# License Server dependencies
+fastapi>=0.115
+uvicorn[standard]>=0.30
+SQLAlchemy>=2.0
+psycopg2-binary>=2.9
+pydantic>=2.7
+pydantic-settings>=2.3
+cryptography>=42.0
+python-multipart>=0.0.9

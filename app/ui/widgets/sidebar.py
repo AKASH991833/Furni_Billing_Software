@@ -8,7 +8,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QVBoxLayout,
-    QWidget,
 )
 
 NAV_ITEMS = [

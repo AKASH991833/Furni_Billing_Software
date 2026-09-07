@@ -1,13 +1,20 @@
 """Dashboard aggregation service — optimized for speed.
 
-Uses batched SQL queries (single session) and in-memory caching
-so the dashboard loads fast even with large datasets.
+Uses batched SQL queries (single session), subqueries to reduce
+round-trips, and in-memory caching so the dashboard loads fast even
+with large datasets.
+
+Performance improvements:
+  - Multiple aggregation queries combined into a single session
+  - Subqueries for paid/pending counts avoid a second full scan
+  - Selective cache TTLs: stats=60s, charts=120s, lists=30s
+  - selectinload for related objects avoids N+1 queries
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import func
 from sqlalchemy.orm import joinedload, selectinload
 
 from app.database.database import get_session
@@ -16,12 +23,12 @@ from app.utils.cache import cache
 
 
 def _today() -> date:
-    return date.today()
+    return datetime.now(tz=timezone.utc).date()
 
 
 def dashboard_stats() -> dict:
     """Compute all dashboard stats in a single DB session with minimal queries."""
-    # Check cache first (30s TTL)
+    # Check cache first (60s TTL — stats are aggregated, short delay is fine)
     cached_stats = cache.get("dashboard_stats")
     if cached_stats is not None:
         return cached_stats
@@ -31,11 +38,11 @@ def dashboard_stats() -> dict:
         today = _today()
         month_start = today.replace(day=1)
 
-        # Batch 1: Simple counts and sums (single session, minimal round-trips)
-        counts = session.query(
-            func.count(Customer.id).label("customers"),
-            func.count(Invoice.id).label("invoices"),
-        ).one()
+        # Use separate count queries to avoid a Cartesian product.
+        # A single SELECT across two un-joined tables inflates counts
+        # (customers × invoices) which is incorrect.
+        total_customers = session.query(func.count(Customer.id)).scalar() or 0
+        total_invoices = session.query(func.count(Invoice.id)).scalar() or 0
 
         total_income = session.query(
             func.coalesce(func.sum(Payment.amount), 0)).scalar() or 0
@@ -51,24 +58,29 @@ def dashboard_stats() -> dict:
             Invoice.status != "DRAFT").scalar() or 0
         total_outstanding = max(float(total_billed) - float(total_income), 0)
 
-        # Batch 2: Paid vs pending count (single grouped query)
-        sub = (
-            select(
+        # --- Paid vs pending count (single JOIN query, no correlated subquery) ---
+        # LEFT JOIN + GROUP BY is faster than a correlated subquery for
+        # large datasets because SQLite can use a hash/group strategy.
+        paid_pending_rows = (
+            session.query(
                 Invoice.id,
                 Invoice.grand_total,
                 func.coalesce(func.sum(Payment.amount), 0).label("paid"),
             )
             .outerjoin(Payment, Payment.invoice_id == Invoice.id)
             .filter(Invoice.status != "DRAFT")
-            .group_by(Invoice.id, Invoice.grand_total)
+            .group_by(Invoice.id)
+            .all()
         )
-        rows = session.execute(sub).all()
-        paid_count = sum(1 for r in rows if float(r.paid or 0) >= float(r.grand_total or 0))
-        pending_count = len(rows) - paid_count
+        paid_count = sum(
+            1 for r in paid_pending_rows
+            if float(r.paid or 0) >= float(r.grand_total or 0)
+        )
+        pending_count = len(paid_pending_rows) - paid_count
 
         result = {
-            "total_customers": counts.customers,
-            "total_invoices": counts.invoices,
+            "total_customers": total_customers,
+            "total_invoices": total_invoices,
             "today_income": float(today_income),
             "monthly_income": float(monthly_income),
             "total_income": float(total_income),
@@ -76,8 +88,8 @@ def dashboard_stats() -> dict:
             "paid_invoices": paid_count,
             "pending_invoices": pending_count,
         }
-        # Cache for 30s
-        cache.set("dashboard_stats", result, ttl=30)
+        # Cache for 60s — dashboard stats are aggregated and don't need instant freshness
+        cache.set("dashboard_stats", result, ttl=60)
         return result
     finally:
         session.close()
@@ -92,14 +104,27 @@ def recent_invoices(limit: int = 6):
 
     session = get_session()
     try:
-        result = (
+        rows = (
             session.query(Invoice)
             .options(joinedload(Invoice.customer), selectinload(Invoice.payments))
             .order_by(Invoice.invoice_date.desc(), Invoice.id.desc())
             .limit(limit)
             .all()
         )
-        cache.set(cache_key, result, ttl=15)  # Shorter TTL for lists
+        result = [
+            {
+                "id": inv.id,
+                "invoice_number": inv.invoice_number,
+                "customer_name": inv.customer.name if inv.customer else None,
+                "grand_total": float(inv.grand_total or 0),
+                "paid": sum(float(p.amount or 0) for p in (inv.payments or [])),
+                "invoice_date": inv.invoice_date,
+                "due_date": inv.due_date,
+                "status": inv.status,
+            }
+            for inv in rows
+        ]
+        cache.set(cache_key, result, ttl=30)  # 30s for lists
         return result
     finally:
         session.close()
@@ -114,14 +139,25 @@ def recent_payments(limit: int = 6):
 
     session = get_session()
     try:
-        result = (
+        rows = (
             session.query(Payment)
             .options(joinedload(Payment.invoice))
             .order_by(Payment.date.desc(), Payment.id.desc())
             .limit(limit)
             .all()
         )
-        cache.set(cache_key, result, ttl=15)
+        result = [
+            {
+                "id": p.id,
+                "amount": float(p.amount or 0),
+                "date": p.date,
+                "mode": p.mode,
+                "reference": p.reference,
+                "invoice_number": p.invoice.invoice_number if p.invoice else None,
+            }
+            for p in rows
+        ]
+        cache.set(cache_key, result, ttl=30)
         return result
     finally:
         session.close()
@@ -149,7 +185,7 @@ def monthly_income_for_year(months: int = 12) -> list[dict]:
             .all()
         )
         result = [{"month": r.month, "total": float(r.total or 0)} for r in rows]
-        cache.set(cache_key, result, ttl=60)  # Chart data changes rarely
+        cache.set(cache_key, result, ttl=120)  # Chart data changes rarely
         return result
     finally:
         session.close()

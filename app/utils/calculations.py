@@ -38,7 +38,7 @@ def format_qty(value) -> str:
     f = to_number(value)
     if f == int(f):
         return str(int(f))
-    return ("%g" % f)
+    return f"{f:g}"
 
 
 def format_rate(value) -> str:
@@ -47,20 +47,25 @@ def format_rate(value) -> str:
     f = to_number(value)
     if f == int(f):
         return str(int(f))
-    return ("%g" % f)
+    return f"{f:g}"
 
 
 def row_amount(qty, rate, manual_amount=None):
     """Compute amount for a row.
 
     If both qty and rate are numeric -> qty * rate.
-    Otherwise the row is LS / text -> return manual_amount (or None).
+    Otherwise the row is LS / manual: use the user's directly-entered numeric
+    price. The price may live in ``manual_amount`` or (when it was entered in
+    the rate/qty cell) in ``rate`` / ``qty``. It is used as-is — LS values are
+    never multiplied.
     Returns a numeric value or None (meaning: needs manual input).
     """
     if is_number(qty) and is_number(rate):
         return round(float(qty) * float(rate), 2)
-    if manual_amount is not None and is_number(manual_amount):
-        return round(float(manual_amount), 2)
+    # LS / manual row — take the directly-entered numeric price, don't multiply.
+    for candidate in (manual_amount, rate, qty):
+        if candidate is not None and is_number(candidate):
+            return round(float(candidate), 2)
     return None
 
 
@@ -72,14 +77,14 @@ def _row_fields(r):
     """Normalise a row (ORM object or dict) to (area, qty, rate, manual)."""
     if hasattr(r, "area") and hasattr(r, "qty_raw"):
         area = getattr(r, "area", "") or ""
-        q = getattr(r, "qty_raw")
-        rt = getattr(r, "rate_raw")
-        manual = getattr(r, "amount")
+        q = r.qty_raw
+        rt = r.rate_raw
+        manual = r.amount
     elif hasattr(r, "qty"):
         area = getattr(r, "area", "") or ""
-        q = getattr(r, "qty")
-        rt = getattr(r, "rate")
-        manual = getattr(r, "amount")
+        q = r.qty
+        rt = r.rate
+        manual = r.amount
     else:
         area = r.get("area", "") or ""
         q = r.get("qty_raw") if isinstance(r.get("qty_raw"), str) else r.get("qty")
@@ -147,9 +152,15 @@ def compute_full_invoice(rows, discount=0, gst_rate=0) -> dict:
 
 
 def apply_gst(subtotal, discount, gst_rate) -> dict:
-    """Return subtotal, discount, gst, grand total."""
+    """Return subtotal, discount, gst, grand total.
+
+    Discount is clamped to the range [0, subtotal] so the net/grand total
+    can never go negative or increase due to a negative discount.
+    """
     disc = 0.0 if not is_number(discount) else float(discount)
     rate = 0.0 if not is_number(gst_rate) else float(gst_rate)
+    disc = max(disc, 0.0)  # discount must never be negative
+    disc = min(disc, max(float(subtotal), 0.0))  # and never exceed subtotal
     nett = subtotal - disc
     gst = round(nett * rate / 100.0, 2)
     grand = nett + gst
@@ -197,8 +208,14 @@ def amount_in_words(amount) -> str:
     if not is_number(amount):
         return "Zero Rupees Only"
     amount = float(amount)
+    if amount < 0:
+        text = amount_in_words(abs(amount))
+        return "Minus " + text
     rupees = int(amount)
-    paise = int(round((amount - rupees) * 100))
+    paise = round((amount - rupees) * 100)
+    if paise == 100:
+        rupees += 1
+        paise = 0
 
     def convert(n):
         if n == 0:
@@ -220,8 +237,8 @@ def amount_in_words(amount) -> str:
         return part.strip()
 
     words = convert(rupees) or "Zero"
-    words += " Rupees"
+    words += " Rupee" if rupees == 1 else " Rupees"
     if paise:
-        words += " and " + _two_digits(paise) + " Paise"
+        words += " and " + _two_digits(paise) + (" Paise" if paise != 1 else " Paisa")
     words += " Only"
     return words

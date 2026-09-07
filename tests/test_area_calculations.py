@@ -3,15 +3,14 @@
 Run with:  python -m pytest tests/test_area_calculations.py -q
 (from the project root)
 """
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import sys
 
 from app.utils.calculations import (
+    apply_gst,
     compute_area_totals,
     compute_full_invoice,
     compute_rows,
     row_amount,
-    apply_gst,
 )
 
 
@@ -48,17 +47,23 @@ def test_row_amount_ls_uses_manual():
     assert row_amount("LS", "LS", 1234.5) == 1234.5
 
 
-def test_row_amount_ls_without_manual():
-    assert row_amount("LS", "1000") is None
+def test_row_amount_ls_uses_numeric_price():
+    # Qty = LS OR Rate = LS -> manual/LS row.
+    # The numeric price entered in the rate/qty cell is used directly (never
+    # multiplied).
+    assert row_amount("LS", "6500") == 6500.0
+    assert row_amount("LS", "15000") == 15000.0
+    assert row_amount("LS", "1000") == 1000.0
     assert row_amount("LS", "LS") is None
     assert row_amount("", "") is None
 
 
 def test_row_amount_decimal_and_invalid():
     assert row_amount("1e3", "2") == 2000.0
-    assert row_amount("abc", "100") is None
-    assert row_amount("100", "xyz") is None
-    assert row_amount(float("nan"), "5") is None
+    assert row_amount("abc", "100") == 100.0       # LS row -> numeric rate used
+    assert row_amount("100", "xyz") == 100.0       # LS row -> numeric qty used
+    assert row_amount(float("nan"), "5") == 5.0    # LS row -> numeric rate used
+    assert row_amount(float("nan"), "abc") is None
 
 
 # --------------------------------------------------------------------------
@@ -182,10 +187,11 @@ def test_full_invoice_large_numbers():
     assert res["grand_total"] == 1180000000.0
 
 
-def test_full_invoice_negative_discount():
+def test_full_invoice_negative_discount_clamped_to_zero():
     res = compute_full_invoice([d("HALL", "2", "1000")], discount=-100, gst_rate=0)
     assert res["subtotal"] == 2000.0
-    assert res["grand_total"] == 2100.0
+    assert res["discount"] == 0.0
+    assert res["grand_total"] == 2000.0
 
 
 def test_subtotal_equals_sum_of_area_totals():
@@ -213,6 +219,43 @@ def test_apply_gst_unchanged():
 
 
 # --------------------------------------------------------------------------
+# LS + decimal full-invoice scenario (spec acceptance)
+# --------------------------------------------------------------------------
+
+def test_spec_ls_and_decimal_full_invoice():
+    """HALL: TV Unit (1x50000), Wall Panel (1.5x12000), False Ceiling (LS manual 27800).
+    KITCHEN: Kitchen Cabinet (2x18500), Tall Unit (1x19000)."""
+    rows = [
+        d("HALL", "1", "50000"),
+        d("HALL", "1.5", "12000"),
+        d("HALL", "LS", "27800", 27800),   # manual LS amount
+        d("KITCHEN", "2", "18500"),
+        d("KITCHEN", "1", "19000"),
+    ]
+    res = compute_full_invoice(rows, discount=0, gst_rate=18)
+    assert res["area_totals"] == {"HALL": 50000.0 + 18000.0 + 27800.0,
+                                  "KITCHEN": 37000.0 + 19000.0}
+    subtotal = 95800.0 + 56000.0
+    assert res["subtotal"] == subtotal
+    assert res["gst_amount"] == round(subtotal * 18 / 100, 2)
+    assert res["grand_total"] == round(subtotal * 1.18, 2)
+
+
+def test_spec_ls_rate_only_full_invoice():
+    """Qty = LS, Rate = numeric -> numeric rate used directly as amount,
+    included in area total, subtotal, GST and grand total."""
+    rows = [
+        d("HALL", "LS", "6500"),       # amount 6500 (rate used directly)
+        d("HALL", "LS", "15000"),      # amount 15000
+        d("HALL", "2.25", "10000"),    # 22500 normal decimal
+    ]
+    res = compute_full_invoice(rows, discount=0, gst_rate=0)
+    assert res["subtotal"] == 6500.0 + 15000.0 + 22500.0
+    assert res["area_totals"] == {"HALL": 6500.0 + 15000.0 + 22500.0}
+    assert res["grand_total"] == res["subtotal"]
+
+
+# --------------------------------------------------------------------------
 # Standalone runner (no pytest dependency)
 # --------------------------------------------------------------------------
 if __name__ == "__main__":
@@ -227,7 +270,7 @@ if __name__ == "__main__":
             fn()
             print(f"PASS  {name}")
             passed += 1
-        except Exception:
+        except Exception:  # noqa: BLE001
             print(f"FAIL  {name}")
             traceback.print_exc()
             failed += 1

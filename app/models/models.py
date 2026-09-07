@@ -6,20 +6,18 @@ keeps its own data.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import (
     Boolean,
     Column,
     Date,
     DateTime,
-    Float,
     ForeignKey,
     Integer,
     Numeric,
     String,
     Text,
-    UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -33,8 +31,8 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     full_name = Column(String(120))
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
 
 
 class BusinessProfile(Base):
@@ -58,8 +56,28 @@ class BusinessProfile(Base):
     show_gst = Column(Boolean, default=True)
     default_gst_rate = Column(Numeric(5, 2), default=18.0)
     currency = Column(String(10), default="₹")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    # Invoice cell formatting defaults
+    default_font_family = Column(String(60), default="")
+    default_font_size = Column(Integer, default=13)
+    default_font_bold = Column(Boolean, default=False)
+    default_font_underline = Column(Boolean, default=False)
+    # Per-area font overrides (JSON): {"HALL": {"font_family": "Arial", ...}, ...}
+    default_area_fonts = Column(Text, default="{}")
+    # Invoice numbering format
+    invoice_format = Column(String(60), default="PREFIX-SEQ")  # e.g. PREFIX-SEQ, PREFIX-YEAR-SEQ, PREFIX-SEQ-YEAR
+    invoice_sequence_digits = Column(Integer, default=4)         # zero-pad width: 4 → 0001
+    next_sequence_number = Column(Integer, default=1)            # manual reset point
+    # PDF / print customization
+    pdf_paper_size = Column(String(10), default="A4")           # A4, A5, LETTER
+    pdf_margin_top = Column(Numeric(4, 1), default=15.0)        # mm
+    pdf_margin_bottom = Column(Numeric(4, 1), default=15.0)
+    pdf_margin_left = Column(Numeric(4, 1), default=15.0)
+    pdf_margin_right = Column(Numeric(4, 1), default=15.0)
+    pdf_primary_color = Column(String(12), default="")          # hex like #173560; empty = theme default
+    pdf_secondary_color = Column(String(12), default="")        # hex like #C8A24B; empty = theme default
+    pdf_theme = Column(String(30), default="colour")           # colour, classic, modern, minimal, elegant
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
 
 
 class Customer(Base):
@@ -74,8 +92,8 @@ class Customer(Base):
     state = Column(String(80))
     gstin = Column(String(30))
     notes = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
 
     invoices = relationship("Invoice", back_populates="customer")
 
@@ -87,7 +105,7 @@ class Project(Base):
     name = Column(String(150), nullable=False)
     site_address = Column(Text)
     notes = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
     customer = relationship("Customer")
     invoices = relationship("Invoice", back_populates="project")
@@ -100,7 +118,7 @@ class Item(Base):
     area = Column(String(60), index=True)
     is_custom = Column(Boolean, default=True)
     is_system = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
 
 class Area(Base):
@@ -109,7 +127,7 @@ class Area(Base):
     name = Column(String(60), unique=True, nullable=False, index=True)
     is_system = Column(Boolean, default=False)
     sort_order = Column(Integer, default=0)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
 
 class Invoice(Base):
@@ -130,8 +148,8 @@ class Invoice(Base):
     grand_total = Column(Numeric(14, 2), default=0)
     amount_in_words = Column(String(500))
     notes = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
 
     customer = relationship("Customer", back_populates="invoices")
     project = relationship("Project", back_populates="invoices")
@@ -182,7 +200,7 @@ class Payment(Base):
     mode = Column(String(30), default="Cash")
     reference = Column(String(120))
     notes = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
 
     invoice = relationship("Invoice", back_populates="payments")
 
@@ -191,8 +209,4 @@ class Setting(Base):
     __tablename__ = "settings"
     key = Column(String(120), primary_key=True)
     value = Column(Text)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-def _string_column(*args, **kwargs):
-    return Column(String, *args, **kwargs)
+    updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))

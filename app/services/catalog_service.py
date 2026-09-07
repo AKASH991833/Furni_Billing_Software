@@ -4,8 +4,6 @@ Frequently accessed data (areas, items) is cached for speed.
 """
 from __future__ import annotations
 
-from sqlalchemy import func
-
 from app.database.database import get_session
 from app.models.models import Area, Item
 from app.utils.cache import cache
@@ -66,6 +64,7 @@ def rename_area(old_name: str, new_name: str) -> bool:
         for it in session.query(Item).filter(Item.area == old_name).all():
             it.area = new_name
         session.commit()
+        cache.invalidate("areas_list")
         return True
     finally:
         session.close()
@@ -164,11 +163,26 @@ def add_custom_item(name: str, area: str) -> Item:
 
 
 def get_or_create_item(name: str, area: str) -> Item:
+    """Find an existing item or create one within a single session.
+
+    Avoids the nested-session issue where ``add_custom_item`` would open
+    its own session, leaving the returned object detached.
+    """
     session = get_session()
     try:
-        item = session.query(Item).filter_by(name=name.strip(), area=area.strip().upper()).first()
+        item = session.query(Item).filter_by(
+            name=name.strip(), area=area.strip().upper()).first()
         if item is None:
-            item = add_custom_item(name, area)
+            item = Item(
+                name=name.strip(),
+                area=area.strip().upper(),
+                is_custom=True,
+                is_system=False,
+            )
+            session.add(item)
+            session.commit()
+            session.refresh(item)
+            cache.invalidate_prefix("suggest_items")
         return item
     finally:
         session.close()

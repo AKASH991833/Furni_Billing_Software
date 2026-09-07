@@ -28,16 +28,16 @@ Keyboard shortcuts:
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, QObject, QPoint, QEvent, Qt, QDate
-from PySide6.QtGui import QKeySequence, QShortcut, QDrag
+from PySide6.QtCore import QDate, QEvent, QObject, Qt, QTimer
+from PySide6.QtGui import QColor, QFont, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDateEdit,
     QDialog,
     QDoubleSpinBox,
-    QFormLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -48,18 +48,25 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSpinBox,
+    QSizePolicy,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
-from app.services import business_service, catalog_service, customer_service, invoice_service
-from app.services.invoice_service import next_invoice_number, peek_next_invoice_number
-from app.ui.widgets.common import show_toast
+from app.services import (
+    business_service,
+    catalog_service,
+    customer_service,
+    invoice_service,
+)
+from app.services.invoice_service import peek_next_invoice_number
+from app.ui.widgets.common import _dark_or_light, show_toast
 from app.utils import calculations as calc
-
+from app.utils.area_icons import get_area_icon
 
 SYS_DELETE = "\U0001F5D1"   # 🗑 trash
 SYS_EDIT = "\u270E"          # ✎ edit
@@ -73,7 +80,7 @@ def _fmt(v) -> str:
         f = float(v)
         if f == int(f):
             return str(int(f))
-        return ("%g" % f)
+        return f"{f:g}"
     return str(v)
 
 
@@ -81,98 +88,17 @@ def _money(v) -> str:
     try:
         return f"\u20B9 {float(v or 0):,.2f}"
     except (TypeError, ValueError):
-        return f"\u20B9 0.00"
+        return "\u20B9 0.00"
 
 
-class MeasurementHelper(QDialog):
-    """Feet/inches helper that builds a Size text like 6'6\" x 6'."""
-
-    def __init__(self, parent=None, current=""):
-        super().__init__(parent)
-        self.setWindowTitle("Measurement Helper")
-        self.setMinimumWidth(400)
-        v = QVBoxLayout(self)
-        v.setSpacing(14)
-
-        title = QLabel("Enter length and width in feet / inches")
-        title.setObjectName("dialogTitle")
-        v.addWidget(title)
-
-        hint = QLabel("Example: 9' 6\" length   x   6' width   →   9'6\" × 6'")
-        hint.setStyleSheet("color:#6B7280;")
-        v.addWidget(hint)
-
-        def spin(maxv=300):
-            s = QSpinBox()
-            s.setRange(0, maxv)
-            s.setValue(0)
-            s.setAlignment(Qt.AlignCenter)
-            return s
-
-        self.f1 = spin(); self.i1 = spin(12)
-        self.f2 = spin(); self.i2 = spin(12)
-
-        form = QFormLayout()
-        form.setVerticalSpacing(12)
-
-        def ft_in_row(f, i, label):
-            row = QHBoxLayout()
-            row.setSpacing(8)
-            row.addWidget(f); row.addWidget(QLabel("ft"))
-            row.addWidget(i); row.addWidget(QLabel("in"))
-            row.addStretch(1)
-            return label, row
-
-        form.addRow(*ft_in_row(self.f1, self.i1, "Length:"))
-        form.addRow(*ft_in_row(self.f2, self.i2, "Width:"))
-        v.addLayout(form)
-
-        self._parse_current(current)
-
-        btns = QHBoxLayout()
-        btns.addStretch(1)
-        cancel = QPushButton("Cancel")
-        cancel.clicked.connect(self.reject)
-        ok = QPushButton("Insert")
-        ok.setObjectName("primaryButton")
-        ok.clicked.connect(self._ok)
-        btns.addWidget(cancel); btns.addWidget(ok)
-        v.addLayout(btns)
-
-    def _parse_current(self, current):
-        if not current or not isinstance(current, str):
-            return
-        parts = [p.strip() for p in current.split("x") if p.strip()]
-        if len(parts) != 2:
-            return
-
-        def to_vals(s):
-            import re
-            ft = re.search(r"(\d+)'", s)
-            inch = re.search(r'(\d+)"', s)
-            return (int(ft.group(1)) if ft else 0, int(inch.group(1)) if inch else 0)
-
-        f1, i1 = to_vals(parts[0]); f2, i2 = to_vals(parts[1])
-        self.f1.setValue(f1); self.i1.setValue(i1)
-        self.f2.setValue(f2); self.i2.setValue(i2)
-
-    def _ok(self):
-        def part(ft, inch):
-            if inch == 0:
-                return f"{ft}'"
-            return f"{ft}'{inch}\""
-        self._size = f"{part(self.f1.value(), self.i1.value())} × {part(self.f2.value(), self.i2.value())}"
-        self.accept()
-
-    def result(self) -> str:
-        return getattr(self, "_size", "")
+from app.ui.pages.editor_measurement import MeasurementHelper
 
 
 class InvoiceEditor(QWidget):
     """Full invoice editing surface."""
 
-    COLUMNS = ["S.N.", "DESCRIPTION / ITEM", "SIZE / MEASUREMENT", "QTY",
-               "RATE (\u20B9)", "AMOUNT (\u20B9)", "ACTION"]
+    COLUMNS = ("S.N.", "DESCRIPTION / ITEM", "SIZE / MEASUREMENT", "QTY",
+               "RATE (\u20B9)", "AMOUNT (\u20B9)", "ACTION")
 
     def __init__(self, main_window=None, invoice=None, customer_id=None,
                  on_close_callback=None, parent=None):
@@ -187,6 +113,13 @@ class InvoiceEditor(QWidget):
         self._undo_stack = []     # stack of (items_copy, description) for Ctrl+Z
         self._dirty = False       # True when there are unsaved changes
         self._clipboard = None     # copied row dict for Ctrl+C / Ctrl+V
+        self._cell_formatting = {}  # {(gi, field): {bold, underline, font_size, text_color, bg_color}}
+        self._selected_cells = set()  # {(gi, field)} for multi-cell font formatting
+        # Debounce full recalculation while the user is typing in qty/rate/amount.
+        self._recalc_timer = QTimer(self)
+        self._recalc_timer.setSingleShot(True)
+        self._recalc_timer.setInterval(200)
+        self._recalc_timer.timeout.connect(self._recalc)
         self._build()
         self._setup_shortcuts()
         self._setup_autosave()
@@ -194,22 +127,45 @@ class InvoiceEditor(QWidget):
 
     # ============================================================ UI build
     def _build(self):
+        self.setObjectName("invoiceEditor")
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 10, 16, 12)
+        root.setContentsMargins(20, 10, 20, 10)
         root.setSpacing(8)
 
         root.addLayout(self._build_action_bar())
 
-        # Top row: ultra-compact Invoice Details (left) + Summary (right top)
-        top_row = QHBoxLayout()
-        top_row.setSpacing(12)
-        top_row.addWidget(self._build_header_card(), 1)
-        top_row.addWidget(self._build_summary_panel(), 0)
-        root.addLayout(top_row, 0)  # stretch=0: top row is minimum height only
+        # Quick Stats Bar — always visible at top
+        self.stats_bar = self._build_quick_stats_bar()
+        root.addWidget(self.stats_bar)
 
-        # Items & Area Entry fills ALL remaining height — this is where data entry
-        # happens, so it gets priority space.
-        root.addWidget(self._build_items_card(), 1)
+        # Single page scroll — Invoice Details → Items (full width) → Summary
+        # (full width, below all items). No fixed heights hide any content; the
+        # whole page scrolls as one clearly-defined region.
+        self.page_scroll = QScrollArea()
+        self.page_scroll.setObjectName("editorPageScroll")
+        self.page_scroll.setWidgetResizable(True)
+        self.page_scroll.setFrameShape(QFrame.NoFrame)
+        # No left↔right scrolling — the page always fits the window width.
+        self.page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        self.page_container = QWidget()
+        self.page_container.setObjectName("editorPageContainer")
+        page = QVBoxLayout(self.page_container)
+        page.setContentsMargins(0, 0, 0, 0)
+        page.setSpacing(12)
+        page.addWidget(self._build_header_card(), 0)
+        # Customer Info Card (shown when customer selected)
+        self.customer_info_card = self._build_customer_info_card()
+        page.addWidget(self.customer_info_card)
+        page.addWidget(self._build_items_card(), 1)
+        page.addWidget(self._build_summary_panel(), 0)
+        self.page_layout = page
+        self.page_scroll.setWidget(self.page_container)
+        root.addWidget(self.page_scroll, 1)
+
+        # Invoice Progress Indicator
+        self.progress_bar = self._build_progress_indicator()
+        root.addWidget(self.progress_bar)
 
         self._load_customers()
         self._mark_clean()  # Starting state is clean
@@ -227,6 +183,25 @@ class InvoiceEditor(QWidget):
         sc_del.activated.connect(lambda: self._delete_row())
         sc_undo = QShortcut(QKeySequence("Ctrl+Z"), self)
         sc_undo.activated.connect(self._undo)
+        # Ctrl+1..9 to switch to area by index
+        for i in range(1, 10):
+            sc = QShortcut(QKeySequence(f"Ctrl+{i}"), self)
+            sc.activated.connect(lambda idx=i: self._switch_to_area(idx - 1))
+        # Ctrl+E to export CSV
+        sc_export = QShortcut(QKeySequence("Ctrl+E"), self)
+        sc_export.activated.connect(self._export_csv)
+
+    def _switch_to_area(self, index):
+        """Switch focus to the area section at the given index."""
+        if 0 <= index < len(self._sections):
+            sec = self._sections[index]
+            if hasattr(sec, '_table') and sec._table.rowCount() > 0:
+                # Focus the first description field in that area
+                first_gi = getattr(sec, '_start_gi', 0)
+                w = self._row_widgets.get(first_gi)
+                if w:
+                    w['desc'].setFocus()
+                    self._active_gi = first_gi
 
     # ---------------------------------------------------- undo / auto-save
     def _setup_autosave(self):
@@ -255,16 +230,26 @@ class InvoiceEditor(QWidget):
             self._save("DRAFT")
             self._dirty = False
             show_toast(self, "Auto-saved draft.", "info")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass  # Silently fail — don't interrupt the user
 
     def _mark_dirty(self):
         """Mark the invoice as having unsaved changes."""
         self._dirty = True
+        self._update_title_indicator()
 
     def _mark_clean(self):
         """Mark the invoice as clean (saved)."""
         self._dirty = False
+        self._update_title_indicator()
+
+    def _update_title_indicator(self):
+        """Update the title bar to show unsaved changes indicator."""
+        base = self.title_label.text().rstrip(" *")
+        if self._dirty:
+            self.title_label.setText(base + " *")
+        else:
+            self.title_label.setText(base)
 
     def _push_undo(self, description="change"):
         """Save current state to the undo stack."""
@@ -325,15 +310,19 @@ class InvoiceEditor(QWidget):
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         table.setAlternatingRowColors(True)
         table.setStyleSheet(
-            "QTableWidget { background: white; alternate-background-color: #F6F8FC;"
-            " border: 1px solid #E5E7EB; border-radius: 8px; }"
+            "QTableWidget { background: "
+            + _dark_or_light("rgba(31,41,55,0.9)", "white")
+            + "; alternate-background-color: "
+            + _dark_or_light("rgba(40,53,72,0.6)", "#F6F8FC")
+            + "; border: 1px solid "
+            + _dark_or_light("#374151", "#E5E7EB")
+            + "; border-radius: 8px; }"
             "QHeaderView::section { background: #173560; color: white; font-weight: 600;"
             " padding: 6px; border: none; }"
         )
         for i, (key, action) in enumerate(shortcuts):
             key_item = QTableWidgetItem(key)
             key_item.setFont(key_item.font())
-            from PySide6.QtGui import QFont
             f = QFont()
             f.setBold(True)
             key_item.setFont(f)
@@ -362,68 +351,70 @@ class InvoiceEditor(QWidget):
     # --------------------------------------------------------- action bar
     def _build_action_bar(self) -> QVBoxLayout:
         bar = QVBoxLayout()
-        bar.setSpacing(0)
-        bar.setContentsMargins(0, 0, 0, 0)
+        bar.setSpacing(2)
+        bar.setContentsMargins(0, 0, 0, 6)
 
-        # top row: breadcrumb (left) + Back + Save buttons (right) — compact single line
+        # top row: breadcrumb (left) + action buttons (right)
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
-        crumb = QLabel("Invoices  ›  New Invoice")
-        crumb.setStyleSheet("color:#6B7280; font-size:11px;")
+        top.setSpacing(0)
+        crumb = QLabel("Invoices  \u203A  New Invoice")
+        crumb.setObjectName("editorBreadcrumb")
         top.addWidget(crumb)
         top.addStretch(1)
-        btn_draft = self._btn("Save Draft")
-        btn_draft.setStyleSheet("font-size:11px; padding:4px 10px;")
-        btn_draft.clicked.connect(lambda: self._save("DRAFT"))
-        btn_save = self._btn("✓ Save", "primaryButton")
-        btn_save.setStyleSheet("font-size:11px; padding:4px 10px;")
-        btn_save.clicked.connect(lambda: self._save("SAVED"))
-        self.back_btn = self._btn("← Back")
-        self.back_btn.setObjectName("backButton")
-        self.back_btn.setStyleSheet("font-size:11px; padding:4px 10px;")
+
+        self.back_btn = self._btn("\u2190  Back")
+        self.back_btn.setObjectName("editorBackBtn")
         self.back_btn.setCursor(Qt.PointingHandCursor)
         self.back_btn.clicked.connect(self._close_editor)
-        top.addWidget(btn_draft)
-        top.addWidget(btn_save)
+
+        btn_draft = self._btn("Save Draft")
+        btn_draft.setObjectName("editorDraftBtn")
+        btn_draft.clicked.connect(lambda: self._save("DRAFT"))
+
+        btn_save = self._btn("\u2713  Save", "editorSaveBtn")
+        btn_save.clicked.connect(lambda: self._save("SAVED"))
+
+        # WhatsApp share button (visible only after invoice is saved)
+        self.btn_whatsapp = self._btn("\uD83D\uDCAC WhatsApp")
+        self.btn_whatsapp.setObjectName("whatsappBtn")
+        self.btn_whatsapp.clicked.connect(self._share_whatsapp)
+        self.btn_whatsapp.setVisible(False)
+
+        # Print button
+        self.btn_print_direct = self._btn("\uD83D\uDDA8 Print")
+        self.btn_print_direct.clicked.connect(self._print_direct)
+        self.btn_print_direct.setVisible(False)
+
         top.addWidget(self.back_btn)
+        top.addSpacing(8)
+        top.addWidget(btn_draft)
+        top.addSpacing(6)
+        top.addWidget(btn_save)
+        top.addSpacing(8)
+        top.addWidget(self.btn_whatsapp)
+        top.addSpacing(6)
+        top.addWidget(self.btn_print_direct)
         bar.addLayout(top)
 
+        # title row (with unsaved indicator)
         self.title_label = QLabel("New Invoice")
-        self.title_label.setObjectName("pageTitle")
-        self.title_label.setStyleSheet("font-size:16px; font-weight:700; padding-top:2px;")
-
+        self.title_label.setObjectName("editorTitle")
         bar.addWidget(self.title_label)
 
         # override crumb text on edit
         self.crumb_label = crumb
         return bar
 
-    # ========================= PART A: Invoice Details — 4-row compact layout
+    # ========================= PART A: Invoice Details — ultra-compact strip
     def _build_header_card(self) -> QFrame:
         card = QFrame()
         card.setObjectName("editorSection")
-        card.setStyleSheet(
-            "QFrame#editorSection { background: white; border: 1px solid #E5E7EB; border-radius: 10px; }"
-            "QLabel#fieldLabel { color: #6B7280; font-size: 10px; font-weight: 600; }"
-            "QLineEdit, QComboBox, QDateEdit { padding: 4px 8px; font-size: 12px; }"
-        )
         v = QVBoxLayout(card)
-        v.setContentsMargins(12, 8, 12, 8)
-        v.setSpacing(4)
+        v.setContentsMargins(14, 10, 14, 10)
+        v.setSpacing(6)
 
-        # Title — single compact line, buttons are in the action bar above
-        title = self._section_title("\uD83D\uDCC4", "Invoice Details")
-        title.setStyleSheet("color:#173560; font-size:11px; font-weight:700;")
-        v.addWidget(title)
-
-        # --- Ultra-compact grid: labels above inputs, minimal spacing ---
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(10)
-        grid.setVerticalSpacing(2)
-        grid.setColumnStretch(1, 1)
-        grid.setColumnStretch(3, 1)
-        grid.setColumnStretch(5, 1)
-
+        # Create fields first
         self.f_invoice_no = QLineEdit()
         self.f_invoice_no.setReadOnly(True)
         self.f_date = QDateEdit(QDate.currentDate())
@@ -434,65 +425,354 @@ class InvoiceEditor(QWidget):
         self.f_customer = QComboBox()
         self.f_customer.setEditable(True)
         self.f_customer.setInsertPolicy(QComboBox.NoInsert)
+        self.f_customer.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.f_customer.setMinimumContentsLength(14)
+        self.f_customer.setMinimumWidth(200)
         self.f_customer.completer().setFilterMode(Qt.MatchContains)
         self.f_customer.completer().setCaseSensitivity(Qt.CaseInsensitive)
         self.f_customer.currentIndexChanged.connect(self._on_customer_changed)
         self.f_customer.lineEdit().setPlaceholderText("Search by name or mobile...")
         self.f_customer.lineEdit().textChanged.connect(self._on_customer_search)
 
+        self.f_invoice_no.setMinimumWidth(120)
+        self.f_date.setMinimumWidth(118)
+        self.f_due.setMinimumWidth(118)
+
         self.f_site = QLineEdit()
         self.f_site.setPlaceholderText("Project / Site name")
         self.f_site_addr = QLineEdit()
         self.f_site_addr.setPlaceholderText("Street, city, state, pincode")
+        self.f_notes = QLineEdit()
+        self.f_notes.setPlaceholderText("Internal notes (not on PDF)")
 
-        # Row 0: Invoice No | Date | Due Date + quick presets
-        grid.addWidget(self._field_label("INVOICE NO."), 0, 0)
-        grid.addWidget(self.f_invoice_no, 1, 0)
-        grid.addWidget(self._field_label("DATE"), 0, 2)
-        grid.addWidget(self.f_date, 1, 2)
-        grid.addWidget(self._field_label("DUE DATE"), 0, 4)
+        # Helper: label + input stacked tightly
+        def _field(label_text, widget):
+            pair = QVBoxLayout()
+            pair.setSpacing(1)
+            pair.setContentsMargins(0, 0, 0, 0)
+            lbl = self._field_label(label_text)
+            pair.addWidget(lbl)
+            pair.addWidget(widget)
+            return pair
+
+        # Payment terms dropdown + Due date with presets
+        due_box = QVBoxLayout()
+        due_box.setSpacing(1)
+        due_box.setContentsMargins(0, 0, 0, 0)
+        due_box.addWidget(self._field_label("PAYMENT TERMS"))
         due_row = QHBoxLayout()
         due_row.setSpacing(3)
-        due_row.addWidget(self.f_due, 1)
+        self.f_payment_terms = QComboBox()
+        self.f_payment_terms.addItems([
+            "Due on Delivery", "Net 7", "Net 14", "Net 15",
+            "Net 30", "Net 45", "Net 60", "Custom"
+        ])
+        self.f_payment_terms.setMinimumWidth(110)
+        self.f_payment_terms.currentTextChanged.connect(self._on_payment_terms_changed)
+        due_row.addWidget(self.f_payment_terms, 1)
         for days, label in [(7, "7d"), (14, "14d"), (30, "30d")]:
             btn = self._btn(label)
-            btn.setFixedSize(32, 22)
-            btn.setStyleSheet("font-size:10px; padding:1px; border-radius:4px;")
-            btn.clicked.connect(lambda _, d=days: self.f_due.setDate(
-                QDate.currentDate().addDays(d)))
+            btn.setObjectName("duePresetBtn")
+            btn.setFixedSize(28, 20)
+            btn.setStyleSheet(btn.styleSheet() + "font-size: 9px; padding: 1px;")
+            btn.clicked.connect(lambda _, d=days: self._set_due_date(d))
             due_row.addWidget(btn)
-        grid.addLayout(due_row, 1, 4)
+        due_box.addLayout(due_row)
+        # Due date row below
+        due_date_box = QVBoxLayout()
+        due_date_box.setSpacing(1)
+        due_date_box.setContentsMargins(0, 0, 0, 0)
+        due_date_box.addWidget(self._field_label("DUE DATE"))
+        due_date_row = QHBoxLayout()
+        due_date_row.setSpacing(3)
+        due_date_row.addWidget(self.f_due, 1)
+        due_date_box.addLayout(due_date_row)
 
-        # Row 1: Customer (+New) | Project/Site | Site Address
+        # Customer with +New button
+        cust_box = QVBoxLayout()
+        cust_box.setSpacing(1)
+        cust_box.setContentsMargins(0, 0, 0, 0)
+        cust_box.addWidget(self._field_label("CUSTOMER"))
         cust_row = QHBoxLayout()
-        cust_row.setSpacing(4)
+        cust_row.setSpacing(3)
         cust_row.addWidget(self.f_customer, 1)
         btn_new_cust = self._btn("+ New")
         btn_new_cust.clicked.connect(self._new_customer)
         cust_row.addWidget(btn_new_cust)
-        grid.addWidget(self._field_label("CUSTOMER"), 2, 0)
-        grid.addLayout(cust_row, 3, 0, 1, 2)
-        grid.addWidget(self._field_label("PROJECT / SITE"), 2, 2)
-        grid.addWidget(self.f_site, 3, 2)
-        grid.addWidget(self._field_label("SITE ADDRESS"), 2, 4)
-        grid.addWidget(self.f_site_addr, 3, 4)
+        cust_box.addLayout(cust_row)
 
-        v.addLayout(grid)
+        # Row 1: invoice identity fields
+        row1 = QHBoxLayout()
+        row1.setSpacing(10)
+        row1.addLayout(_field("INV NO.", self.f_invoice_no))
+        row1.addLayout(_field("DATE", self.f_date))
+        row1.addLayout(due_box, 2)
+        row1.addLayout(due_date_box, 1)
+        row1.addStretch(1)
+        v.addLayout(row1)
 
-        # Notes / Remarks row — ultra-compact
+        # Row 2: customer + site fields
+        row2 = QHBoxLayout()
+        row2.setSpacing(10)
+        row2.addLayout(cust_box, 3)
+        row2.addLayout(_field("PROJECT / SITE", self.f_site), 2)
+        row2.addLayout(_field("SITE ADDRESS", self.f_site_addr), 3)
+        v.addLayout(row2)
+
+        # Notes row — full width
         notes_row = QHBoxLayout()
         notes_row.setSpacing(6)
         notes_lbl = QLabel("NOTES")
         notes_lbl.setObjectName("fieldLabel")
-        notes_lbl.setStyleSheet("color:#6B7280; font-size:10px; font-weight:600;")
-        self.f_notes = QLineEdit()
-        self.f_notes.setPlaceholderText("Internal notes (not on PDF)")
-        self.f_notes.setStyleSheet("font-size:11px; padding:2px 6px;")
         notes_row.addWidget(notes_lbl)
         notes_row.addWidget(self.f_notes, 1)
         v.addLayout(notes_row)
 
+        # Customer recent invoices (shown when customer selected)
+        self.customer_invoices_frame = QFrame()
+        self.customer_invoices_frame.setObjectName("recentInvoicesFrame")
+        self.customer_invoices_frame.setStyleSheet(
+            "QFrame { border: 1px solid "
+            + _dark_or_light("#374151", "#E5E7EB")
+            + "; border-radius: 6px; padding: 6px; background: "
+            + _dark_or_light("rgba(31,41,55,0.9)", "#FAFBFC")
+            + "; }"
+        )
+        ci_layout = QVBoxLayout(self.customer_invoices_frame)
+        ci_layout.setContentsMargins(8, 4, 8, 4)
+        ci_layout.setSpacing(4)
+        ci_header = QHBoxLayout()
+        ci_title = QLabel("\uD83D\uDCCB Recent Invoices")
+        ci_title.setStyleSheet("font-weight: 600; color: " + _dark_or_light("#F9FAFB", "#374151") + "; font-size: 11px;")
+        ci_header.addWidget(ci_title)
+        ci_header.addStretch(1)
+        ci_layout.addLayout(ci_header)
+        self.customer_invoices_label = QLabel("Select a customer to see recent invoices.")
+        self.customer_invoices_label.setStyleSheet("color: " + _dark_or_light("#9CA3AF", "#6B7280") + "; font-size: 11px;")
+        self.customer_invoices_label.setWordWrap(True)
+        ci_layout.addWidget(self.customer_invoices_label)
+        self.customer_invoices_frame.setVisible(False)
+        v.addWidget(self.customer_invoices_frame)
+
         return card
+
+    def _build_quick_stats_bar(self) -> QFrame:
+        """Build a quick stats bar showing key metrics at a glance."""
+        bar = QFrame()
+        bar.setObjectName("quickStatsBar")
+        bar.setStyleSheet(
+            "QFrame#quickStatsBar { background: "
+            + _dark_or_light("rgba(31,41,55,0.9)", "rgba(23, 53, 96, 0.05)")
+            + "; border: 1px solid "
+            + _dark_or_light("rgba(75,85,99,0.5)", "rgba(200, 210, 230, 0.4)")
+            + "; border-radius: 8px;"
+            " padding: 4px 12px; }"
+        )
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 6, 12, 6)
+        h.setSpacing(20)
+
+        def stat_widget(label, default="0"):
+            w = QWidget()
+            lay = QVBoxLayout(w)
+            lay.setContentsMargins(0, 0, 0, 0)
+            lay.setSpacing(0)
+            val = QLabel(default)
+            val.setObjectName("quickStatValue")
+            val.setStyleSheet("font-size: 16px; font-weight: 800; color: " + _dark_or_light("#F9FAFB", "#173560") + ";")
+            lbl = QLabel(label)
+            lbl.setStyleSheet("font-size: 9px; color: " + _dark_or_light("#9CA3AF", "#6B7280") + "; font-weight: 600; letter-spacing: 0.5px;")
+            lay.addWidget(val)
+            lay.addWidget(lbl)
+            return w, val
+
+        self._stat_areas, self._stat_areas_val = stat_widget("AREAS")
+        self._stat_items, self._stat_items_val = stat_widget("ITEMS")
+        self._stat_subtotal, self._stat_subtotal_val = stat_widget("SUBTOTAL")
+        self._stat_gst, self._stat_gst_val = stat_widget("GST")
+        self._stat_total, self._stat_total_val = stat_widget("TOTAL", "\u20B9 0")
+
+        # Separator
+        sep = QFrame()
+        sep.setFixedWidth(1)
+        sep.setFixedHeight(28)
+        sep.setStyleSheet("background: " + _dark_or_light("rgba(75,85,99,0.5)", "rgba(200, 210, 230, 0.5)") + ";")
+
+        h.addWidget(self._stat_areas)
+        h.addWidget(self._stat_items)
+        h.addWidget(sep)
+        h.addWidget(self._stat_subtotal)
+        h.addWidget(self._stat_gst)
+        h.addWidget(self._stat_total)
+        h.addStretch(1)
+
+        return bar
+
+    def _update_quick_stats(self, computed, totals):
+        """Update the quick stats bar with current values."""
+        areas = {it.get("area") for it in self._items if it.get("area")}
+        self._stat_areas_val.setText(str(len(areas)))
+        self._stat_items_val.setText(str(len(self._items)))
+        self._stat_subtotal_val.setText(_money(totals.get("subtotal", 0)))
+        self._stat_gst_val.setText(_money(totals.get("gst_amount", 0)))
+        self._stat_total_val.setText(_money(totals.get("grand_total", 0)))
+
+    def _build_customer_info_card(self) -> QFrame:
+        """Build customer info card shown when customer is selected."""
+        card = QFrame()
+        card.setObjectName("customerInfoCard")
+        card.setStyleSheet(
+            "QFrame#customerInfoCard { background: "
+            + _dark_or_light("rgba(31,41,55,0.9)", "rgba(239, 243, 250, 0.6)")
+            + "; border: 1px solid "
+            + _dark_or_light("rgba(75,85,99,0.5)", "rgba(200, 210, 230, 0.5)")
+            + "; border-radius: 10px;"
+            " padding: 8px; }"
+        )
+        card.setVisible(False)
+
+        h = QHBoxLayout(card)
+        h.setContentsMargins(12, 8, 12, 8)
+        h.setSpacing(16)
+
+        # Customer avatar placeholder
+        self._cust_avatar = QLabel("\U0001F464")
+        self._cust_avatar.setStyleSheet(
+            "font-size: 28px; background: "
+            + _dark_or_light("#1F2937", "white")
+            + "; border-radius: 20px;"
+            " padding: 4px; border: 1px solid "
+            + _dark_or_light("#374151", "#E5E7EB") + ";"
+        )
+        self._cust_avatar.setFixedSize(44, 44)
+        self._cust_avatar.setAlignment(Qt.AlignCenter)
+        h.addWidget(self._cust_avatar)
+
+        # Customer details
+        details = QVBoxLayout()
+        details.setSpacing(2)
+        self._cust_name_label = QLabel("")
+        self._cust_name_label.setStyleSheet("font-size: 14px; font-weight: 700; color: " + _dark_or_light("#F9FAFB", "#173560") + ";")
+        self._cust_detail_label = QLabel("")
+        self._cust_detail_label.setStyleSheet("font-size: 11px; color: " + _dark_or_light("#9CA3AF", "#6B7280") + ";")
+        self._cust_stats_label = QLabel("")
+        self._cust_stats_label.setStyleSheet("font-size: 10px; color: #059669; font-weight: 600;")
+        details.addWidget(self._cust_name_label)
+        details.addWidget(self._cust_detail_label)
+        details.addWidget(self._cust_stats_label)
+        h.addLayout(details, 1)
+
+        # Quick actions
+        actions = QVBoxLayout()
+        actions.setSpacing(4)
+        btn_view_cust = self._btn("View History")
+        btn_view_cust.setStyleSheet("font-size: 10px; padding: 4px 8px;")
+        btn_view_cust.clicked.connect(self._view_customer_history)
+        actions.addWidget(btn_view_cust)
+        actions.addStretch(1)
+        h.addLayout(actions)
+
+        return card
+
+    def _view_customer_history(self):
+        """Navigate to customer page to view full history."""
+        if self.main_window and hasattr(self.main_window, 'show_page'):
+            self.main_window.show_page("customers")
+
+    def _build_progress_indicator(self) -> QFrame:
+        """Build invoice completion progress indicator."""
+        bar = QFrame()
+        bar.setObjectName("progressIndicator")
+        bar.setStyleSheet(
+            "QFrame#progressIndicator { background: transparent;"
+            " border-top: 1px solid "
+            + _dark_or_light("rgba(75,85,99,0.5)", "rgba(200, 210, 230, 0.3)")
+            + ";"
+            " padding: 6px 12px; }"
+        )
+        h = QHBoxLayout(bar)
+        h.setContentsMargins(12, 4, 12, 4)
+        h.setSpacing(8)
+
+        self._progress_label = QLabel("Invoice: 0% complete")
+        self._progress_label.setStyleSheet("font-size: 10px; color: " + _dark_or_light("#9CA3AF", "#6B7280") + "; font-weight: 500;")
+        h.addWidget(self._progress_label)
+
+        # Progress bar
+        self._progress_bar = QFrame()
+        self._progress_bar.setFixedHeight(6)
+        self._progress_bar.setStyleSheet(
+            "QFrame { background: " + _dark_or_light("rgba(55,65,81,0.8)", "#E5E7EB") + "; border-radius: 3px; }"
+        )
+        self._progress_fill = QFrame(self._progress_bar)
+        self._progress_fill.setStyleSheet(
+            "QFrame { background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
+            "stop:0 #059669, stop:1 #10B981); border-radius: 3px; }"
+        )
+        self._progress_fill.setGeometry(0, 0, 0, 6)
+        h.addWidget(self._progress_bar, 1)
+
+        self._progress_status = QLabel("")
+        self._progress_status.setStyleSheet("font-size: 10px; font-weight: 600;")
+        h.addWidget(self._progress_status)
+
+        return bar
+
+    def _update_progress(self):
+        """Update the progress indicator based on current invoice state."""
+        score = 0
+        reasons = []
+
+        # Customer selected (+30)
+        if self.f_customer.currentData():
+            score += 30
+        else:
+            reasons.append("Select customer")
+
+        # Items added (+40)
+        non_empty = [it for it in self._items if it.get("description")]
+        if non_empty:
+            score += min(40, len(non_empty) * 10)
+            if len(non_empty) < 3:
+                reasons.append(f"Add more items ({len(non_empty)}/3+)")
+        else:
+            reasons.append("Add items")
+
+        # Due date set (+10)
+        if self.f_due.date() != QDate.currentDate():
+            score += 10
+
+        # Notes added (+5)
+        if self.f_notes.text().strip():
+            score += 5
+
+        # Terms added (+5)
+        if self.f_terms.toPlainText().strip():
+            score += 5
+
+        # Site info (+10)
+        if self.f_site.text().strip():
+            score += 10
+
+        # Update UI
+        pct = min(100, score)
+        self._progress_label.setText(f"Invoice: {pct}% complete")
+
+        # Update fill bar width
+        bar_width = self._progress_bar.width()
+        fill_width = int(bar_width * pct / 100)
+        self._progress_fill.setGeometry(0, 0, fill_width, 6)
+
+        # Status text and color
+        if pct >= 80:
+            self._progress_status.setText("\u2705 Ready to save")
+            self._progress_status.setStyleSheet("font-size: 10px; font-weight: 600; color: #059669;")
+        elif pct >= 50:
+            self._progress_status.setText("\u23F3 In progress")
+            self._progress_status.setStyleSheet("font-size: 10px; font-weight: 600; color: #D97706;")
+        else:
+            self._progress_status.setText(f"\u2753 {', '.join(reasons[:2])}")
+            self._progress_status.setStyleSheet("font-size: 10px; font-weight: 600; color: " + _dark_or_light("#9CA3AF", "#6B7280") + ";")
 
     def _btn(self, text, object_name=None) -> QPushButton:
         b = QPushButton(text)
@@ -501,7 +781,7 @@ class InvoiceEditor(QWidget):
             b.setObjectName(object_name)
         return b
 
-    # ==================== PART B+C: Items & Area Entry — grouped toolbar
+    # ==================== PART B+C: Items & Area Entry — glass toolbar
     def _build_items_card(self) -> QFrame:
         card = QFrame()
         card.setObjectName("editorSection")
@@ -513,40 +793,48 @@ class InvoiceEditor(QWidget):
         head = QHBoxLayout()
         head.addWidget(self._section_title("\uD83D\uDCDD", "Items & Area Entry"))
         head.addStretch(1)
+        self.item_count_label = QLabel("0 items")
+        self.item_count_label.setObjectName("itemCountBadge")
+        head.addWidget(self.item_count_label)
         v.addLayout(head)
 
-        # --- PART C: Grouped toolbar with labels + separators ---
+        # --- Toolbar with glass-style grouped buttons ---
         tb = QHBoxLayout()
         tb.setSpacing(4)
+        tb.setContentsMargins(0, 0, 0, 0)
 
         # Group: Add
-        add_lbl = QLabel("Add:")
-        add_lbl.setObjectName("toolbarGroupLabel")
-        add_lbl.setStyleSheet("color:#6B7280; font-size:11px; font-weight:700; padding-left:4px;")
-        tb.addWidget(add_lbl)
-        btn_add_menu = self._btn("+ Add Item ▾", "primaryButton")
+        btn_add_menu = self._btn("+ Add Item \u25BE")
+        btn_add_menu.setObjectName("primaryButton")
         self.add_menu = QMenu()
         btn_add_menu.setMenu(self.add_menu)
         self._populate_add_menu()
         tb.addWidget(btn_add_menu)
+        # Recent items dropdown
+        btn_recent = self._btn("Recent \u25BE")
+        self.recent_menu = QMenu()
+        btn_recent.setMenu(self.recent_menu)
+        self._populate_recent_menu()
+        tb.addWidget(btn_recent)
         btn_new_area = self._btn("+ New Area")
         btn_new_area.clicked.connect(self._add_new_area)
         tb.addWidget(btn_new_area)
 
         tb.addWidget(self._tb_sep())
 
-        # Group: Row
-        row_lbl = QLabel("Row:")
-        row_lbl.setStyleSheet("color:#6B7280; font-size:11px; font-weight:700; padding-left:4px;")
-        tb.addWidget(row_lbl)
-        btn_dup = self._btn("\u2398 Duplicate")
+        # Group: Row operations
+        btn_dup = self._btn("\uD83D\uDCCE")
+        btn_dup.setToolTip("Duplicate row  (Ctrl+D)")
         btn_dup.clicked.connect(self._duplicate_row)
-        btn_up = self._btn("\u25B2 Up")
+        btn_up = self._btn("\u25B2")
+        btn_up.setToolTip("Move row up  (Ctrl+\u2191)")
         btn_up.clicked.connect(lambda: self._move(-1))
-        btn_down = self._btn("\u25BC Down")
+        btn_down = self._btn("\u25BC")
+        btn_down.setToolTip("Move row down  (Ctrl+\u2193)")
         btn_down.clicked.connect(lambda: self._move(1))
-        btn_del = self._btn("\u2715 Delete")
+        btn_del = self._btn("\u2715")
         btn_del.setObjectName("ghostButton")
+        btn_del.setToolTip("Delete row  (Delete)")
         btn_del.clicked.connect(lambda: self._delete_row())
         tb.addWidget(btn_dup)
         tb.addWidget(btn_up)
@@ -556,53 +844,57 @@ class InvoiceEditor(QWidget):
         tb.addWidget(self._tb_sep())
 
         # Group: Tools
-        tools_lbl = QLabel("Tools:")
-        tools_lbl.setStyleSheet("color:#6B7280; font-size:11px; font-weight:700; padding-left:4px;")
-        tb.addWidget(tools_lbl)
-        btn_meas = self._btn("\uD83D\uDCD0 Measure")
+        btn_meas = self._btn("Measure")
         btn_meas.clicked.connect(self._measure_current)
         self.btn_meas = btn_meas
         tb.addWidget(btn_meas)
-        btn_preview = self._btn("\uD83D\uDCC4 Preview PDF")
+        btn_preview = self._btn("Preview PDF")
         btn_preview.clicked.connect(self._preview_pdf)
         tb.addWidget(btn_preview)
 
+        tb.addWidget(self._tb_sep())
+
+        # Group: Export & Templates
+        btn_export = self._btn("Export CSV")
+        btn_export.clicked.connect(self._export_csv)
+        tb.addWidget(btn_export)
+        btn_template_save = self._btn("Save Template")
+        btn_template_save.clicked.connect(self._save_as_template)
+        tb.addWidget(btn_template_save)
+        btn_template_load = self._btn("Load Template")
+        btn_template_load.clicked.connect(self._load_template)
+        tb.addWidget(btn_template_load)
+
         tb.addStretch(1)
 
-        # Item count indicator
-        self.item_count_label = QLabel("0 items")
-        self.item_count_label.setStyleSheet("color:#173560; font-size:11px; font-weight:600; padding-right:8px;")
-        tb.addWidget(self.item_count_label)
-
-        # Shortcut hints on the right
-        hints = QLabel("Tab: fields  |  Ctrl+D: dup  |  Ctrl+C/V: copy/paste  |  Ctrl+↑↓: move  |  Ctrl+Z: undo  |  F1: all shortcuts")
-        hints.setStyleSheet("color:#9CA3AF; font-size:11px; padding-right:2px;")
+        # Shortcut hints
+        hints = QLabel("Tab \u2192 fields  |  Ctrl+D: dup  |  Ctrl+C/V: copy/paste  |  Ctrl+\u2191\u2193: move  |  Ctrl+Z: undo  |  F1: help")
+        hints.setObjectName("shortcutHint")
+        hints.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        hints.setMinimumWidth(0)
         tb.addWidget(hints)
 
         v.addLayout(tb)
 
-        # Area sections container — fills remaining height, scrolls internally
-        self.areas_scroll = QScrollArea()
-        self.areas_scroll.setWidgetResizable(True)
-        self.areas_scroll.setFrameShape(QFrame.NoFrame)
+        # Area sections container — grows naturally with the number of items.
         self.areas_container = QWidget()
+        self.areas_container.setStyleSheet("background: transparent;")
         self.areas_layout = QVBoxLayout(self.areas_container)
-        self.areas_layout.setContentsMargins(0, 2, 4, 0)
-        self.areas_layout.setSpacing(8)
-        self.areas_scroll.setWidget(self.areas_container)
-        v.addWidget(self.areas_scroll, 1)
+        self.areas_layout.setContentsMargins(0, 4, 4, 0)
+        self.areas_layout.setSpacing(12)
+        v.addWidget(self.areas_container, 1)
         return card
 
     def _tb_sep(self) -> QFrame:
         s = QFrame()
         s.setFixedWidth(1)
-        s.setFixedHeight(26)
-        s.setStyleSheet("background:#D7DEE9;")
+        s.setFixedHeight(24)
+        s.setStyleSheet("background: " + _dark_or_light("rgba(75,85,99,0.5)", "rgba(200, 210, 230, 0.5)") + "; border-radius: 0px;")
         return s
 
     def _items_hint(self) -> QLabel:
         l = QLabel('Pick an Area from "+ Add Item ▾" to start  ·  Qty or Rate = LS for manual amount')
-        l.setStyleSheet("color:#6B7280; font-size:12px;")
+        l.setStyleSheet("color:" + _dark_or_light("#9CA3AF", "#6B7280") + "; font-size:12px;")
         return l
 
     def _populate_add_menu(self):
@@ -616,98 +908,189 @@ class InvoiceEditor(QWidget):
         nm = self.add_menu.addAction("+ Add New Area")
         nm.triggered.connect(self._add_new_area)
 
-    # ==================== PART B: Summary panel (unchanged structurally)
+    def _populate_recent_menu(self):
+        """Populate the recent items dropdown with recently used items."""
+        self.recent_menu.clear()
+        # Get unique items from current invoice
+        seen = set()
+        recent_items = []
+        for it in reversed(self._items):
+            name = it.get("description", "")
+            area = it.get("area", "OTHER")
+            if name and name not in seen:
+                seen.add(name)
+                recent_items.append((name, area))
+        if not recent_items:
+            act = self.recent_menu.addAction("No recent items")
+            act.setEnabled(False)
+            return
+        for name, area in recent_items[:10]:  # Show max 10 recent items
+            act = self.recent_menu.addAction(f"{name} ({area})")
+            act.triggered.connect(lambda _, n=name, a=area: self._add_recent_item(n, a))
+
+    def _add_recent_item(self, name, area):
+        """Add a recently used item to the specified area."""
+        self._push_undo(f"add recent item '{name}'")
+        row_d = {"area": area, "description": name, "size": "",
+                 "qty_raw": "", "rate_raw": "", "amount": None}
+        insert_at = len(self._items)
+        for gi in range(len(self._items) - 1, -1, -1):
+            if self._items[gi].get("area") == area:
+                insert_at = gi + 1
+                break
+        self._items.insert(insert_at, row_d)
+        self._rebuild_from_index(insert_at)
+        self._recalc()
+        self._active_gi = insert_at
+        self._mark_dirty()
+        w = self._row_widgets.get(insert_at)
+        if w:
+            w["qty"].setFocus()
+
+# ==================== PART B: Summary panel (full width, below items)
     def _build_summary_panel(self) -> QFrame:
         panel = QFrame()
         panel.setObjectName("summaryPanel")
-        panel.setMinimumWidth(330)
-        panel.setMaximumWidth(430)
         v = QVBoxLayout(panel)
-        v.setContentsMargins(14, 10, 14, 10)
-        v.setSpacing(5)
+        v.setContentsMargins(18, 16, 18, 18)
+        v.setSpacing(10)
 
+        # Title
         title = QLabel("SUMMARY")
         title.setObjectName("summaryTitle")
         title.setAlignment(Qt.AlignCenter)
         v.addWidget(title)
 
-        # GST + Discount on one compact line
-        gd = QHBoxLayout()
-        gd.setSpacing(10)
-        self.cb_gst = QCheckBox("GST")
-        self.cb_gst.setCursor(Qt.PointingHandCursor)
-        self.cb_gst.setStyleSheet("color:white; font-weight:600;")
-        self.cb_gst.toggled.connect(self._on_gst_toggled)
-        gd.addWidget(self.cb_gst)
+        v.addSpacing(2)
 
-        rl = QLabel("Rate %")
-        rl.setStyleSheet("color:#C9D6EA;")
+        # GST + Discount row
+        gd = QGridLayout()
+        gd.setHorizontalSpacing(12)
+        gd.setVerticalSpacing(4)
+        gd.setColumnStretch(0, 0)
+        gd.setColumnStretch(1, 0)
+        gd.setColumnStretch(2, 1)
+        gd.setColumnStretch(3, 0)
+        gd.setColumnStretch(4, 1)
+        self.cb_gst = QCheckBox("GST")
+        self.cb_gst.setObjectName("summaryGst")
+        self.cb_gst.setCursor(Qt.PointingHandCursor)
+        self.cb_gst.toggled.connect(self._on_gst_toggled)
+        gd.addWidget(self.cb_gst, 0, 0)
+
+        rl = QLabel("Rate")
+        rl.setObjectName("summaryFieldLabel")
         self.f_gst = QDoubleSpinBox()
+        self.f_gst.setObjectName("summarySpin")
         self.f_gst.setRange(0, 100)
         self.f_gst.setDecimals(2)
         self.f_gst.setSuffix(" %")
+        self.f_gst.setEnabled(False)
         self.f_gst.valueChanged.connect(self._recalc)
-        gd.addWidget(rl)
-        gd.addWidget(self.f_gst)
+        gd.addWidget(rl, 0, 1)
+        gd.addWidget(self.f_gst, 0, 2)
 
-        dl = QLabel("Disc")
-        dl.setStyleSheet("color:#C9D6EA;")
+        dl = QLabel("Discount")
+        dl.setObjectName("summaryFieldLabel")
         self.f_discount = QDoubleSpinBox()
+        self.f_discount.setObjectName("summarySpin")
         self.f_discount.setRange(0, 1_000_000_000)
         self.f_discount.setDecimals(2)
         self.f_discount.setPrefix("\u20B9 ")
         self.f_discount.valueChanged.connect(self._recalc)
-        gd.addWidget(dl)
-        gd.addWidget(self.f_discount, 1)
+        gd.addWidget(dl, 0, 3)
+        gd.addWidget(self.f_discount, 0, 4)
         v.addLayout(gd)
 
         # Discount quick presets
         disc_presets = QHBoxLayout()
-        disc_presets.setSpacing(3)
-        disc_lbl = QLabel("Quick:")
-        disc_lbl.setStyleSheet("color:#C9D6EA; font-size:10px;")
-        disc_presets.addWidget(disc_lbl)
+        disc_presets.setSpacing(4)
+        disc_presets.addStretch(1)
         for pct in [5, 10, 15, 20]:
             btn = self._btn(f"{pct}%")
-            btn.setFixedSize(34, 20)
-            btn.setStyleSheet("font-size:10px; padding:1px; border-radius:4px;")
+            btn.setObjectName("discountPresetBtn")
+            btn.setFixedSize(40, 24)
             btn.clicked.connect(lambda _, p=pct: self._apply_discount_pct(p))
             disc_presets.addWidget(btn)
         disc_presets.addStretch(1)
         v.addLayout(disc_presets)
 
+        v.addSpacing(2)
         v.addWidget(self._divider())
+        v.addSpacing(2)
 
-        # 2x2 grid of totals to save vertical height
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(18)
-        grid.setVerticalSpacing(3)
+        # Totals — four stat boxes in 2x2 grid
+        stat_grid = QGridLayout()
+        stat_grid.setSpacing(8)
         self.l_subtotal = self._sum_row("Subtotal")
         self.l_discount = self._sum_row("Discount")
         self.l_taxable = self._sum_row("Taxable")
         self.l_gst = self._sum_row("GST")
-        grid.addWidget(self.l_subtotal, 0, 0)
-        grid.addWidget(self.l_discount, 0, 1)
-        grid.addWidget(self.l_taxable, 1, 0)
-        grid.addWidget(self.l_gst, 1, 1)
-        v.addLayout(grid)
+        for idx, sf in enumerate((self.l_subtotal, self.l_discount, self.l_taxable, self.l_gst)):
+            f = QFrame()
+            f.setObjectName("summaryStat")
+            fl = QVBoxLayout(f)
+            fl.setContentsMargins(12, 8, 12, 8)
+            fl.addWidget(sf)
+            sf._stat_frame = f
+            stat_grid.addWidget(f, idx // 2, idx % 2)
+        v.addLayout(stat_grid)
 
-        v.addWidget(self._divider())
-
+        # Grand total bar
+        gt = QFrame()
+        gt.setObjectName("grandTotalBar")
+        gtl = QHBoxLayout(gt)
+        gtl.setContentsMargins(18, 12, 18, 12)
         gl = QLabel("GRAND TOTAL")
         gl.setObjectName("grandTotalLabel")
-        gl.setAlignment(Qt.AlignCenter)
         self.l_grand = QLabel("\u20B9 0.00")
         self.l_grand.setObjectName("grandTotalValue")
-        self.l_grand.setAlignment(Qt.AlignCenter)
-        v.addWidget(gl)
-        v.addWidget(self.l_grand)
+        self.l_grand.setAlignment(Qt.AlignRight)
+        gtl.addWidget(gl)
+        gtl.addStretch(1)
+        gtl.addWidget(self.l_grand)
+        v.addWidget(gt)
 
+        # Amount in words
         self.l_words = QLabel("Zero Rupees Only")
         self.l_words.setObjectName("wordsValue")
         self.l_words.setWordWrap(True)
         self.l_words.setAlignment(Qt.AlignCenter)
         v.addWidget(self.l_words)
+
+        v.addSpacing(2)
+        v.addWidget(self._divider())
+        v.addSpacing(2)
+
+        # Terms + Authorized signature (side by side, full width)
+        foot = QHBoxLayout()
+        foot.setSpacing(28)
+        tcol = QVBoxLayout()
+        tcol.setSpacing(4)
+        terms_title = QLabel("TERMS & CONDITIONS")
+        terms_title.setObjectName("summarySubTitle")
+        self.f_terms = QTextEdit()
+        self.f_terms.setObjectName("summaryTextInput")
+        self.f_terms.setMinimumWidth(220)
+        self.f_terms.setMaximumHeight(72)
+        self.f_terms.setPlaceholderText("e.g. 50% advance, balance on delivery")
+        tcol.addWidget(terms_title)
+        tcol.addWidget(self.f_terms)
+
+        scol = QVBoxLayout()
+        scol.setSpacing(4)
+        scol.setAlignment(Qt.AlignTop)
+        sign_title = QLabel("AUTHORIZED SIGNATURE")
+        sign_title.setObjectName("summarySubTitle")
+        sign_line = QFrame()
+        sign_line.setObjectName("signLine")
+        sign_line.setFixedHeight(36)
+        scol.addWidget(sign_title)
+        scol.addWidget(sign_line)
+
+        foot.addLayout(tcol, 1)
+        foot.addLayout(scol, 0)
+        v.addLayout(foot)
 
         return panel
 
@@ -720,14 +1103,16 @@ class InvoiceEditor(QWidget):
     def _sum_row(self, label) -> QWidget:
         w = QWidget()
         lay = QHBoxLayout(w)
-        lay.setContentsMargins(0, 2, 0, 2)
+        lay.setContentsMargins(0, 3, 0, 3)
         l = QLabel(label)
         l.setObjectName("summaryRowLabel")
         val = QLabel("\u20B9 0.00")
         val.setObjectName("summaryRowValue")
         val.setAlignment(Qt.AlignRight)
-        lay.addWidget(l); lay.addStretch(1); lay.addWidget(val)
-        setattr(w, "_value_label", val)
+        lay.addWidget(l)
+        lay.addStretch(1)
+        lay.addWidget(val)
+        w._value_label = val
         return w
 
     def _sum_row_set(self, widget, value):
@@ -760,6 +1145,38 @@ class InvoiceEditor(QWidget):
                 if c.city:
                     info_parts.append(f"City: {c.city}")
                 self.f_customer.setToolTip("\n".join(info_parts) if info_parts else "")
+                # For a NEW invoice, refresh the customer-scoped invoice number.
+                if self.invoice is None:
+                    self._refresh_invoice_no(c)
+                # Show recent invoices for this customer
+                self._show_customer_recent_invoices(cid)
+                # Update customer info card
+                self._update_customer_info_card(c)
+        else:
+            self.customer_invoices_frame.setVisible(False)
+            self.customer_info_card.setVisible(False)
+
+    def _refresh_invoice_no(self, customer=None):
+        """Update the (read-only) invoice number preview for a new invoice.
+
+        Uses the selected customer's name (scoped numbering) and the invoice
+        date's year. Falls back to the bare prefix preview when no customer
+        is chosen yet.
+        """
+        try:
+            prefix = business_service.get_invoice_prefix()
+            year = self.f_date.date().year() if self.f_date else None
+            if customer is None:
+                cid = self.f_customer.currentData()
+                if cid:
+                    customer = customer_service.get_customer(cid)
+            if customer and getattr(customer, "name", None):
+                self.f_invoice_no.setText(
+                    peek_next_invoice_number(prefix, customer.name, year))
+            else:
+                self.f_invoice_no.setText(peek_next_invoice_number(prefix, None, year))
+        except Exception:  # noqa: BLE001, S110
+            pass
 
     def _on_customer_search(self, text):
         """Filter customer dropdown as user types in the combo box."""
@@ -786,6 +1203,161 @@ class InvoiceEditor(QWidget):
         self.f_customer.blockSignals(False)
         # Re-open the dropdown so user sees filtered results
         self.f_customer.showPopup()
+
+    def _show_customer_recent_invoices(self, customer_id):
+        """Show recent invoices for the selected customer."""
+        try:
+            invoices = customer_service.customer_invoices(customer_id)[:5]
+            if invoices:
+                lines = []
+                for inv in invoices:
+                    status = inv.status
+                    total = float(inv.grand_total or 0)
+                    paid = sum(float(p.amount or 0) for p in (inv.payments or []))
+                    outstanding = max(total - paid, 0)
+                    status_color = "#16A34A" if status == "PAID" else "#DC2626" if outstanding > 0 else (_dark_or_light("#9CA3AF", "#6B7280"))
+                    lines.append(
+                        f"<span style='color:{_dark_or_light('#F9FAFB', '#374151')};'>{inv.invoice_number}</span> "
+                        f"<span style='color:{_dark_or_light('#9CA3AF', '#6B7280')};'>{inv.invoice_date.strftime('%d-%b-%Y') if inv.invoice_date else '-'}</span> "
+                        f"<span style='color:{status_color}; font-weight:600;'>\u20B9{total:,.0f}</span>"
+                        f"{' <span style=color:#DC2626;>\u20B9' + f'{outstanding:,.0f}' + ' pending</span>' if outstanding > 0 else ' <span style=color:#16A34A;>PAID</span>'}"
+                    )
+                self.customer_invoices_label.setText("<br/>".join(lines))
+                self.customer_invoices_frame.setVisible(True)
+            else:
+                self.customer_invoices_label.setText("No previous invoices for this customer.")
+                self.customer_invoices_frame.setVisible(True)
+        except Exception:  # noqa: BLE001
+            self.customer_invoices_frame.setVisible(False)
+
+    def _update_customer_info_card(self, customer):
+        """Update the customer info card with customer details."""
+        try:
+            self._cust_name_label.setText(customer.name or "Unknown")
+            details = []
+            if customer.mobile:
+                details.append(f"\u260E {customer.mobile}")
+            if customer.email:
+                details.append(f"\u2709 {customer.email}")
+            if customer.city:
+                details.append(f"\U0001F4CD {customer.city}")
+            self._cust_detail_label.setText("  ".join(details) if details else "No contact info")
+
+            # Get customer stats
+            totals = customer_service.customer_totals(customer.id)
+            total_invoiced = totals.get("total_invoiced", 0)
+            outstanding = totals.get("outstanding", 0)
+            invoice_count = totals.get("invoice_count", 0)
+
+            stats_parts = []
+            if invoice_count > 0:
+                stats_parts.append(f"{invoice_count} invoice{'s' if invoice_count != 1 else ''}")
+            if total_invoiced > 0:
+                stats_parts.append(f"Total: {_money(total_invoiced)}")
+            if outstanding > 0:
+                stats_parts.append(f"\u26A0 Outstanding: {_money(outstanding)}")
+            elif total_invoiced > 0 and outstanding == 0 and invoice_count > 0:
+                stats_parts.append("\u2705 All paid")
+            self._cust_stats_label.setText("  |  ".join(stats_parts) if stats_parts else "New customer")
+
+            self.customer_info_card.setVisible(True)
+        except Exception:  # noqa: BLE001
+            self.customer_info_card.setVisible(False)
+
+    def _on_payment_terms_changed(self, text):
+        """Update due date based on payment terms selection."""
+        terms_map = {
+            "Due on Delivery": 0,
+            "Net 7": 7,
+            "Net 14": 14,
+            "Net 15": 15,
+            "Net 30": 30,
+            "Net 45": 45,
+            "Net 60": 60,
+        }
+        if text in terms_map:
+            self._set_due_date(terms_map[text])
+
+    def _set_due_date(self, days):
+        """Set due date to current date + days."""
+        self.f_due.setDate(QDate.currentDate().addDays(days))
+        self._mark_dirty()
+
+    def _share_whatsapp(self):
+        """Share invoice PDF via WhatsApp."""
+        if not self.invoice:
+            show_toast(self, "Save the invoice first.", "info")
+            return
+        try:
+            from app.services.whatsapp_service import share_invoice_pdf
+            profile = business_service.get_profile()
+            share_invoice_pdf(
+                self,
+                self.invoice.id,
+                self.invoice.customer.name if self.invoice.customer else "Customer",
+                profile.business_name if profile else "Business",
+                self.invoice.invoice_number,
+                self.invoice.customer.mobile if self.invoice.customer else "",
+            )
+        except Exception as e:  # noqa: BLE001
+            show_toast(self, f"WhatsApp share failed: {e}", "error")
+
+    def _print_direct(self):
+        """Open print dialog directly."""
+        inv_id = self.get_invoice_id()
+        if not inv_id:
+            show_toast(self, "Save the invoice first.", "info")
+            return
+        try:
+            from app.pdf.pdf_service import PdfPreviewDialog
+            dlg = PdfPreviewDialog(inv_id, self)
+            dlg._print()
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Print failed", str(e))
+
+    def _menu_qss(self) -> str:
+        """Return a QMenu stylesheet."""
+        return (
+            "QMenu { background: white; border: 1px solid #D7DEE9; border-radius: 8px; padding: 4px; }"
+            "QMenu::item { padding: 8px 20px; border-radius: 6px; font-size: 12px; }"
+            "QMenu::item:selected { background: #EFF3FA; color: #173560; }"
+            "QMenu::item:disabled { color: #9CA3AF; }"
+            "QMenu::separator { height: 1px; background: #E5E7EB; margin: 4px 8px; }"
+        )
+
+    def _export_csv(self):
+        """Export invoice items to CSV file."""
+        if not self._items:
+            show_toast(self, "No items to export.", "info")
+            return
+        try:
+            from PySide6.QtWidgets import QFileDialog
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Export Items to CSV", "invoice_items.csv",
+                "CSV Files (*.csv)")
+            if not path:
+                return
+            import csv
+            with open(path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(["S.N.", "Area", "Description", "Size", "Qty", "Rate", "Amount"])
+                for i, item in enumerate(self._items, 1):
+                    writer.writerow([
+                        i, item.get("area", ""), item.get("description", ""),
+                        item.get("size", ""), item.get("qty_raw", ""),
+                        item.get("rate_raw", ""), item.get("amount", ""),
+                    ])
+            show_toast(self, f"Exported {len(self._items)} items to {path}", "success")
+        except Exception as e:  # noqa: BLE001
+            show_toast(self, f"Export failed: {e}", "error")
+
+    def _save_as_template(self):
+        from app.ui.pages.editor_templates import save_as_template
+        save_as_template(self)
+
+    def _load_template(self):
+        from app.ui.pages.editor_templates import load_template
+        load_template(self)
 
     def _new_customer(self):
         dlg = QDialog(self)
@@ -823,7 +1395,7 @@ class InvoiceEditor(QWidget):
                 self._load_customers()
                 dlg.accept()
                 idx = self.f_customer.findData(nc.id)
-                self.f_customer.setCurrentIndex(idx if idx >= 0 else 0)
+                self.f_customer.setCurrentIndex(max(idx, 0))
                 show_toast(self, f"Customer '{name}' added.", "success")
             except Exception as e:  # noqa: BLE001
                 QMessageBox.critical(dlg, "Failed", str(e))
@@ -847,10 +1419,13 @@ class InvoiceEditor(QWidget):
                                          invoice.due_date.day))
             if invoice.customer_id:
                 idx = self.f_customer.findData(invoice.customer_id)
-                self.f_customer.setCurrentIndex(idx if idx >= 0 else 0)
+                self.f_customer.setCurrentIndex(max(idx, 0))
             self.f_site.setText(invoice.project.name if invoice.project else invoice.site_address or "")
             self.f_site_addr.setText(invoice.site_address or "")
             self.f_notes.setText(invoice.notes or "")
+            # Terms come from the business profile, not per-invoice
+            _profile = business_service.get_profile()
+            self.f_terms.setPlainText(_profile.terms_conditions if _profile else "")
             self.f_discount.setValue(float(invoice.discount or 0))
             self.cb_gst.setChecked(bool(getattr(invoice, "gst_enabled", True)))
             self.f_gst.setValue(float(invoice.gst_rate or 0))
@@ -864,6 +1439,7 @@ class InvoiceEditor(QWidget):
                 })
             self._rebuild_sections()
         else:
+            self._load_profile_defaults()  # Load font defaults from settings
             profile = business_service.get_profile()
             self.cb_gst.setChecked(bool(profile and profile.show_gst))
             self.f_gst.setEnabled(bool(profile and profile.show_gst))
@@ -871,9 +1447,11 @@ class InvoiceEditor(QWidget):
                                 if (profile and profile.show_gst) else 0)
             prefix = business_service.get_invoice_prefix()
             self.f_invoice_no.setText(peek_next_invoice_number(prefix))
+            # Load business profile terms into the terms field
+            self.f_terms.setPlainText(profile.terms_conditions if profile else "")
             if customer_id:
                 idx = self.f_customer.findData(customer_id)
-                self.f_customer.setCurrentIndex(idx if idx >= 0 else 0)
+                self.f_customer.setCurrentIndex(max(idx, 0))
             self._add_item_to_area(None)  # start with an empty item
 
     # ============================================================ sections
@@ -896,15 +1474,29 @@ class InvoiceEditor(QWidget):
             w = item.widget()
             if w:
                 w.deleteLater()
+        if hasattr(self, "area_splitter") and self.area_splitter:
+            self.area_splitter.deleteLater()
+            self.area_splitter = None
         self._sections = []
         self._row_widgets = {}
 
+    def _cm(self, cm: float) -> int:
+        """Convert centimetres to logical pixels (96 DPI default)."""
+        return max(1, round(cm * self.logicalDpiX() / 2.54))
+
     def _rebuild_sections(self):
         self._clear_sections()
+        # Vertical splitter — every area section can be resized with the mouse.
+        self.area_splitter = QSplitter(Qt.Vertical)
+        self.area_splitter.setObjectName("areaSplitter")
+        self.area_splitter.setChildrenCollapsible(False)
+        self.area_splitter.setHandleWidth(10)
         for sec in self._group_sections():
-            self._build_section(sec)
+            self.area_splitter.addWidget(self._build_section(sec))
+        self.areas_layout.addWidget(self.area_splitter, 1)
         # "+ Add New Area" footer button
         btn_new_area = self._btn("+ Add New Area")
+        btn_new_area.setObjectName("newAreaBtn")
         btn_new_area.clicked.connect(self._add_new_area)
         row = QHBoxLayout()
         row.addStretch(1)
@@ -917,49 +1509,52 @@ class InvoiceEditor(QWidget):
         count = len(self._items)
         if hasattr(self, 'item_count_label'):
             self.item_count_label.setText(f"{count} item{'s' if count != 1 else ''}")
+        # Update progress
+        if hasattr(self, '_update_progress'):
+            self._update_progress()
 
-    # ========================= PART B: Area section — merged header bar
+    # ========================= PART B: Area section — glass depth
     def _build_section(self, sec):
         area = sec["area"]
         sec_widget = QFrame()
         sec_widget.setObjectName("areaSection")
         v = QVBoxLayout(sec_widget)
-        v.setContentsMargins(12, 12, 12, 14)
-        v.setSpacing(10)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(6)
 
         count = sec["end"] - sec["start"]
 
-        # --- Single-line header bar: ▾ Area Name | count | TOTAL + Add btn ---
-        head = QHBoxLayout()
-        head.setSpacing(6)
+        # Header: full-width navy/gold banner with centered, prominent area name.
+        head = QFrame()
+        head.setObjectName("areaBanner")
+        hb = QHBoxLayout(head)
+        hb.setContentsMargins(12, 6, 12, 6)
+        hb.setSpacing(8)
 
         # Collapse/expand toggle
-        collapse_btn = self._btn("▾")
-        collapse_btn.setFixedSize(24, 24)
-        collapse_btn.setStyleSheet(
-            "font-size:12px; padding:0; border:none; color:#173560; font-weight:700;"
-            " background:transparent; border-radius:4px;"
-        )
+        collapse_btn = self._btn("\u25BE")
+        collapse_btn.setObjectName("areaCollapseBtn")
         collapse_btn.setCursor(Qt.PointingHandCursor)
+        collapse_btn.setFixedSize(28, 28)
         collapse_btn.setToolTip("Collapse / Expand area")
-        head.addWidget(collapse_btn)
+        hb.addWidget(collapse_btn, 0)
 
-        heading = QLabel(area)
+        heading = QLabel(f"{get_area_icon(area)}  {area.upper()}")
         heading.setObjectName("areaHeading")
+        heading.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
         badge = QLabel(f"{count} item" + ("s" if count != 1 else ""))
         badge.setObjectName("areaCountBadge")
-        head.addWidget(heading)
-        head.addWidget(badge)
-        head.addStretch(1)
-        total_label = QLabel(f"{area} TOTAL  \u20B9 0.00")
-        total_label.setObjectName("areaTotalHeading")
-        head.addWidget(total_label)
-        add_btn = self._btn("+ Add Item in " + area, "primaryButton")
-        add_btn.clicked.connect(lambda _, a=area: self._add_item_to_area(a))
-        head.addWidget(add_btn)
-        v.addLayout(head)
+        hb.addWidget(heading, 1)
+        hb.addWidget(badge, 0)
+        hb.addSpacing(4)
 
-        # --- PART B: Table with stronger grid, navy header, DnD support ---
+        add_btn = self._btn("+ Add Item")
+        add_btn.setObjectName("areaAddBtn")
+        add_btn.clicked.connect(lambda _, a=area: self._add_item_to_area(a))
+        hb.addWidget(add_btn, 0)
+        v.addWidget(head)
+
+        # Item table
         table = QTableWidget(0, len(self.COLUMNS))
         table.setHorizontalHeaderLabels(self.COLUMNS)
         table.verticalHeader().setVisible(False)
@@ -972,41 +1567,29 @@ class InvoiceEditor(QWidget):
         table.setDropIndicatorShown(True)
         table.setDragDropMode(QAbstractItemView.InternalMove)
 
-        table.setStyleSheet(
-            # Base table
-            "QTableWidget { background: white; alternate-background-color: #F6F8FC;"
-            " border: 1.5px solid #B8C6DB; border-radius: 10px;"
-            " gridline-color: #C8D2E6; selection-background-color: transparent; }"
-            # Cells
-            "QTableWidget::item { padding: 4px 6px; border: none;"
-            " border-bottom: 1px solid #DDE3EC; }"
-            "QTableWidget::item:selected { background: #EFF3FA; color: #173560; }"
-            "QTableWidget::item:hover { background: #EFF3FA; }"
-            # Inputs inside cells — fill cell
-            "QTableWidget QLineEdit { background: white; border: 1px solid #D7DEE9;"
-            " border-radius: 5px; padding: 4px 6px; font-size: 13px;"
-            " selection-background-color: #173560; }"
-            "QTableWidget QLineEdit:focus { border-color: #C7A24B;"
-            " background: #FFFDF5; }"
-            # Drop indicator styling
-            "QTableWidget QTableView DropIndicator { background: #C7A24B; }"
-        )
-
         hh = table.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.Fixed)
-        hh.setSectionResizeMode(1, QHeaderView.Stretch)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(6, QHeaderView.Fixed)
-        table.setColumnWidth(0, 44)
-        table.setColumnWidth(2, 150)
-        table.setColumnWidth(3, 90)
-        table.setColumnWidth(4, 110)
-        table.setColumnWidth(5, 130)
-        table.setColumnWidth(6, 122)
-        table.verticalHeader().setDefaultSectionSize(48)
+        # DESCRIPTION stretches to fill the page width (no horizontal scroll);
+        # every other column keeps its cm size and stays mouse-adjustable.
+        hh.setSectionResizeMode(0, QHeaderView.Interactive)  # S.N.
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)      # DESCRIPTION
+        hh.setSectionResizeMode(2, QHeaderView.Interactive)  # SIZE
+        hh.setSectionResizeMode(3, QHeaderView.Interactive)  # QTY
+        hh.setSectionResizeMode(4, QHeaderView.Interactive)  # RATE
+        hh.setSectionResizeMode(5, QHeaderView.Interactive)  # AMOUNT
+        hh.setSectionResizeMode(6, QHeaderView.Interactive)  # ACTION
+        hh.setMinimumSectionSize(28)
+        table.setColumnWidth(0, self._cm(1.0))    # S.N.      ~1 cm
+        table.setColumnWidth(1, self._cm(8.0))    # DESCRIPTION ~8 cm
+        table.setColumnWidth(2, self._cm(3.5))    # SIZE      ~3.5 cm
+        table.setColumnWidth(3, self._cm(2.0))    # QTY       ~2 cm
+        table.setColumnWidth(4, self._cm(3.0))    # RATE      ~3 cm
+        table.setColumnWidth(5, self._cm(4.0))    # AMOUNT    ~4 cm
+        table.setColumnWidth(6, self._cm(3.0))    # ACTION    ~3 cm
+        table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        table.verticalHeader().setDefaultSectionSize(46)
+        table.verticalHeader().setMinimumSectionSize(34)
+        # Rows stretch to fill the table — no empty bottom band inside a section.
+        table.verticalHeader().setSectionResizeMode(QHeaderView.Stretch)
 
         # populate rows for this section
         for gi in range(sec["start"], sec["end"]):
@@ -1018,34 +1601,148 @@ class InvoiceEditor(QWidget):
 
         v.addWidget(table, 1)
 
-        self.areas_layout.addWidget(sec_widget)
+        # Empty area warning (shown when area has 0 items)
+        empty_warning = QLabel(f"\u26A0\uFE0F  No items in {area}. Click '+ Add Item' to add items.")
+        empty_warning.setStyleSheet(
+            "color: " + _dark_or_light("#FCD34D", "#D97706") + ";"
+            " background: " + _dark_or_light("rgba(217,119,6,0.15)", "#FEF3C7") + ";"
+            " border: 1px solid " + _dark_or_light("#D97706", "#FCD34D") + ";"
+            " border-radius: 8px; padding: 12px; font-size: 12px; font-weight: 600;"
+        )
+        empty_warning.setAlignment(Qt.AlignCenter)
+        empty_warning.setVisible(count == 0)
+        v.addWidget(empty_warning)
+
+        # Area total footer — shown below that area's items (not in the header).
+        total_bar = QFrame()
+        total_bar.setObjectName("areaTotalBar")
+        total_row = QHBoxLayout(total_bar)
+        total_row.setContentsMargins(12, 6, 12, 6)
+        total_name = QLabel(f"{area.upper()} TOTAL")
+        total_name.setObjectName("areaTotalName")
+        total_value = QLabel("\u20B9 0.00")
+        total_value.setObjectName("areaTotalValue")
+        total_value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        total_row.addWidget(total_name)
+        total_row.addStretch(1)
+        total_row.addWidget(total_value)
+        v.addWidget(total_bar, 0)
+
         sec_widget._table = table
-        sec_widget._total_label = total_label
+        sec_widget._total_bar = total_bar
+        sec_widget._total_label = total_value
         sec_widget._add_btn = add_btn
         sec_widget._heading = heading
+        sec_widget._badge = badge
+        sec_widget._empty = empty_warning
         sec_widget._start_gi = sec["start"]  # global index of first item in this section
         sec_widget._collapsed = False
 
         # Wire up collapse/expand toggle
-        def _toggle(w=sec_widget, btn=collapse_btn, tb=table, tl=total_label, ab=add_btn):
+        def _toggle(w=sec_widget, btn=collapse_btn, tb=table, bar=total_bar, ab=add_btn):
             w._collapsed = not w._collapsed
             collapsed = w._collapsed
             tb.setVisible(not collapsed)
-            tl.setVisible(not collapsed)
+            bar.setVisible(not collapsed)
             ab.setVisible(not collapsed)
-            btn.setText("▸" if collapsed else "▾")
-        collapse_btn.clicked.connect(_toggle)
+            btn.setText("\u25B8" if collapsed else "\u25BE")
+        collapse_btn.clicked.connect(lambda *_: _toggle())
 
         self._sections.append(sec_widget)
         return sec_widget
 
+    def _section_widget_by_area(self, area):
+        """Return the section widget whose banner heading matches `area`, or None."""
+        for sw in self._sections:
+            if sw._heading.text().strip("\u2014 ").upper() == (area or "OTHER").upper():
+                return sw
+        return None
+
+    def _rebuild_from_index(self, gi, area=None):
+        """Incrementally refresh sections affected by an insert/delete at `gi`.
+
+        Only the section with area `area` (and every section after it) is
+        rebuilt in place; earlier sections and the live QSplitter are left
+        untouched so the UI stays responsive on large invoices.
+
+        `gi` is the global item index; `area` may be passed explicitly when the
+        insert/delete leaves `self._items[gi]` pointing at another area (e.g.
+        deleting the last item of an area).
+
+        When the section structure itself changes (a brand-new area is being
+        added, an area's last item was just deleted, or no sections are built
+        yet), we fall back to a full ``_rebuild_sections()`` for correctness.
+        """
+        ranges = self._group_sections()
+        if not ranges:
+            self._clear_sections()
+            return
+        existing_areas = {sw._heading.text().strip("\u2014 ") for sw in self._sections}
+        target_areas = {r["area"] for r in ranges}
+        # If any area appears in multiple (non-contiguous) blocks, the simple
+        # area-name → section mapping can't be trusted; do a full rebuild.
+        non_contiguous = len(target_areas) != len(ranges)
+        if (not self._sections
+                or not getattr(self, "area_splitter", None)
+                or existing_areas != target_areas
+                or non_contiguous):
+            self._rebuild_sections()
+            return
+        if area is None and 0 <= gi < len(self._items):
+            area = self._items[gi].get("area", "OTHER")
+        start_rebuild = area is None
+        for r in ranges:
+            if not start_rebuild and r["area"] == area:
+                start_rebuild = True
+            if start_rebuild:
+                sw = self._section_widget_by_area(r["area"])
+                if sw is not None:
+                    self._rebuild_section_range(sw, r)
+        # Reconcile: drop section widgets that no longer map to a unique
+        # contiguous range (e.g. left overs from an earlier non-contiguous
+        # state), so self._sections always mirrors self._group_sections().
+        matched = set()
+        for sw in list(self._sections):
+            mark = sw._heading.text().strip("\u2014 ")
+            if mark in target_areas and mark not in matched:
+                matched.add(mark)
+                continue
+            row_keys = [g for g, w in list(self._row_widgets.items()) if w["table"] is sw._table]
+            for rk in row_keys:
+                del self._row_widgets[rk]
+            idx = self.area_splitter.indexOf(sw)
+            if idx >= 0:
+                self.area_splitter.replaceWidget(idx, QWidget())
+            sw.deleteLater()
+            self._sections.remove(sw)
+        self._renumber_all()
+
+    def _rebuild_section_range(self, sw, r):
+        """Rebuild the item table rows for one section widget from a range dict."""
+        area = r["area"]
+        table = sw._table
+        for gi in [g for g, w in list(self._row_widgets.items()) if w["table"] is table]:
+            del self._row_widgets[gi]
+        table.clearContents()
+        table.setRowCount(0)
+        sw._start_gi = r["start"]
+        for gi in range(r["start"], r["end"]):
+            self._insert_row(table, gi)
+        count = r["end"] - r["start"]
+        sw._badge.setText(f"{count} item" + ("s" if count != 1 else ""))
+        empty_label = getattr(sw, "_empty", None)
+        if empty_label is not None:
+            empty_label.setVisible(count == 0)
+            empty_label.setText(f"\u26A0\uFE0F  No items in {area}. Click '+ Add Item' to add items.")
+
     def _cell(self, widget, margins=3) -> QWidget:
         """Wrap an input so it stretches to fill the table cell (avoids clipping)."""
         cell = QWidget()
+        cell.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         lay = QHBoxLayout(cell)
         lay.setContentsMargins(margins, margins, margins, margins)
         lay.setSpacing(0)
-        lay.addWidget(widget, 1)
+        lay.addWidget(widget, 1, Qt.AlignVCenter)
         return cell
 
     def _insert_row(self, table, gi):
@@ -1072,10 +1769,12 @@ class InvoiceEditor(QWidget):
         sbtn = self._row_icon(SYS_RULER, "Measurement helper for this row")
         sbtn.clicked.connect(lambda _, g=gi: self._measure_row(g))
         size_cell = QWidget()
+        size_cell.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         size_lay = QHBoxLayout(size_cell)
         size_lay.setContentsMargins(3, 3, 3, 3)
         size_lay.setSpacing(4)
-        size_lay.addWidget(size, 1); size_lay.addWidget(sbtn)
+        size_lay.addWidget(size, 1, Qt.AlignVCenter)
+        size_lay.addWidget(sbtn, 0, Qt.AlignVCenter)
         table.setCellWidget(r, 2, size_cell)
 
         # Qty (text: decimals / LS)
@@ -1102,9 +1801,11 @@ class InvoiceEditor(QWidget):
 
         # Action: Move Up / Move Down / Edit / Delete
         act_cell = QWidget()
+        act_cell.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         act_lay = QHBoxLayout(act_cell)
         act_lay.setContentsMargins(2, 3, 2, 3)
         act_lay.setSpacing(1)
+        act_lay.setAlignment(Qt.AlignVCenter)
         upb = self._row_icon("\u25B2", "Move row up")
         upb.clicked.connect(lambda _, g=gi: self._move(-1))
         dnb = self._row_icon("\u25BC", "Move row down")
@@ -1115,7 +1816,7 @@ class InvoiceEditor(QWidget):
         dbtn = self._row_icon(SYS_DELETE, "Delete this row")
         dbtn.setObjectName("rowDeleteButton")
         dbtn.clicked.connect(lambda _, g=gi: self._delete_row(g))
-        upb.setFixedSize(26, 30); dnb.setFixedSize(26, 30)
+        upb.setFixedSize(24, 26); dnb.setFixedSize(24, 26)
         act_lay.addWidget(upb); act_lay.addWidget(dnb)
         act_lay.addWidget(ebtn); act_lay.addWidget(dbtn)
         table.setCellWidget(r, 6, act_cell)
@@ -1129,16 +1830,320 @@ class InvoiceEditor(QWidget):
         for wid in (desc, size, qty, rate, amt):
             wid.installEventFilter(self)
 
+        # Attach right-click formatting menu to each cell
+        self._attach_cell_format_menu(desc, gi, "desc")
+        self._attach_cell_format_menu(size, gi, "size")
+        self._attach_cell_format_menu(qty, gi, "qty")
+        self._attach_cell_format_menu(rate, gi, "rate")
+        self._attach_cell_format_menu(amt, gi, "amt")
+        # Re-apply any stored formatting
+        self._apply_cell_fmt(desc, gi, "desc")
+        self._apply_cell_fmt(size, gi, "size")
+        self._apply_cell_fmt(qty, gi, "qty")
+        self._apply_cell_fmt(rate, gi, "rate")
+        self._apply_cell_fmt(amt, gi, "amt")
+
     def _row_icon(self, glyph, tip) -> QPushButton:
         b = QPushButton(glyph)
         b.setObjectName("rowIconButton")
         b.setCursor(Qt.PointingHandCursor)
         b.setToolTip(tip)
-        b.setFixedSize(30, 30)
+        b.setFixedSize(28, 28)
         return b
 
+    # ===================== Cell formatting — right-click menu
+    _DEFAULT_FONT_SIZE = 13
+
+    # Available font families for the font picker
+    _FONT_FAMILIES = (
+        ("Segoe UI",       "Segoe UI"),
+        ("Arial",          "Arial"),
+        ("Times New Roman", "Times New Roman"),
+        ("Courier New",    "Courier New"),
+        ("Verdana",        "Verdana"),
+        ("Georgia",        "Georgia"),
+        ("Trebuchet MS",   "Trebuchet MS"),
+        ("Comic Sans MS",  "Comic Sans MS"),
+        ("Impact",         "Impact"),
+        ("Lucida Console", "Lucida Console"),
+    )
+
+    def _load_profile_defaults(self):
+        """Load font defaults from BusinessProfile and set _DEFAULT_FONT_SIZE."""
+        profile = business_service.get_profile()
+        if not profile:
+            return
+        # Update the class-level default font size
+        self._DEFAULT_FONT_SIZE = int(getattr(profile, "default_font_size", 13) or 13)
+        # Store profile defaults for new cells
+        self._profile_font_family = getattr(profile, "default_font_family", "") or ""
+        self._profile_font_bold = bool(getattr(profile, "default_font_bold", False))
+        self._profile_font_underline = bool(getattr(profile, "default_font_underline", False))
+
+    def _get_cell_fmt(self, gi, field):
+        """Return formatting dict for a cell, creating defaults if needed.
+
+        Uses the profile-wide font defaults (family, size, bold, underline).
+        """
+        key = (gi, field)
+        if key not in self._cell_formatting:
+            # Start with profile defaults
+            family = getattr(self, "_profile_font_family", "")
+            bold = getattr(self, "_profile_font_bold", False)
+            underline = getattr(self, "_profile_font_underline", False)
+            font_size = self._DEFAULT_FONT_SIZE
+
+            self._cell_formatting[key] = {
+                "bold": bold,
+                "underline": underline,
+                "font_size": font_size,
+                "font_family": family,
+                "text_color": "", "bg_color": "",
+            }
+        return self._cell_formatting[key]
+
+    def _apply_cell_fmt(self, widget, gi, field):
+        """Apply stored formatting to a QLineEdit via stylesheet."""
+        fmt = self._get_cell_fmt(gi, field)
+        parts = []
+        parts.append(f"font-size: {fmt['font_size']}px;")
+        if fmt.get("font_family"):
+            parts.append(f"font-family: '{fmt['font_family']}';")
+        if fmt["bold"]:
+            parts.append("font-weight: bold;")
+        if fmt["underline"]:
+            parts.append("text-decoration: underline;")
+        if fmt["text_color"]:
+            parts.append(f"color: {fmt['text_color']};")
+        if fmt["bg_color"]:
+            parts.append(f"background: {fmt['bg_color']};")
+        widget.setStyleSheet(" ".join(parts))
+
+    def _attach_cell_format_menu(self, widget, gi, field):
+        """Attach a right-click context menu for cell formatting to a QLineEdit."""
+        widget.setContextMenuPolicy(Qt.CustomContextMenu)
+
+        def _show_menu(pos):
+            menu = QMenu(widget)
+            menu.setStyleSheet(self._menu_qss())
+            fmt = self._get_cell_fmt(gi, field)
+
+            # --- Bold ---
+            act_bold = menu.addAction(f"{'✓ ' if fmt['bold'] else '  '}Bold  (Ctrl+B)")
+            act_bold.triggered.connect(lambda: self._toggle_fmt(gi, field, "bold", widget))
+
+            # --- Underline ---
+            act_ul = menu.addAction(f"{'✓ ' if fmt['underline'] else '  '}Underline  (Ctrl+U)")
+            act_ul.triggered.connect(lambda: self._toggle_fmt(gi, field, "underline", widget))
+
+            menu.addSeparator()
+
+            # --- Font Family submenu ---
+            current_family = fmt.get("font_family", "")
+            fam_menu = menu.addMenu("  \U0001F4DD  Font Family")
+            for label, family in self._FONT_FAMILIES:
+                tick = "✓ " if current_family == family else "  "
+                act_fam = fam_menu.addAction(f"{tick}{label}")
+                fam_act = act_fam
+                fam_act.triggered.connect(lambda _, f=family: self._set_cell_font_family(gi, field, f, widget))
+            if current_family:
+                fam_menu.addSeparator()
+                act_fam_reset = fam_menu.addAction("  ↺  Reset Font Family")
+                act_fam_reset.triggered.connect(lambda: self._set_cell_font_family(gi, field, "", widget))
+
+            menu.addSeparator()
+
+            # --- Font Size ---
+            act_inc = menu.addAction("  🔍+  Increase Font Size")
+            act_inc.triggered.connect(lambda: self._change_font_size(gi, field, +1, widget))
+            act_dec = menu.addAction("  🔍−  Decrease Font Size")
+            act_dec.triggered.connect(lambda: self._change_font_size(gi, field, -1, widget))
+            act_reset_size = menu.addAction("  ↺  Reset to Default Size")
+            act_reset_size.triggered.connect(lambda: self._reset_font_size(gi, field, widget))
+
+            menu.addSeparator()
+
+            # --- Text Color ---
+            act_tc = menu.addAction("  🎨  Text Color")
+            act_tc.triggered.connect(lambda: self._pick_color(gi, field, "text_color", widget))
+            act_tc_reset = menu.addAction("  ↺  Reset Text Color")
+            act_tc_reset.triggered.connect(lambda: self._reset_color(gi, field, "text_color", widget))
+
+            menu.addSeparator()
+
+            # --- Background Color ---
+            act_bg = menu.addAction("  🖌  Background Color")
+            act_bg.triggered.connect(lambda: self._pick_color(gi, field, "bg_color", widget))
+            act_bg_reset = menu.addAction("  ↺  Reset Background Color")
+            act_bg_reset.triggered.connect(lambda: self._reset_color(gi, field, "bg_color", widget))
+
+            menu.addSeparator()
+
+            # --- Reset All ---
+            act_reset = menu.addAction("  ✕  Reset All Formatting")
+            act_reset.triggered.connect(lambda: self._reset_all_fmt(gi, field, widget))
+
+            menu.exec(widget.mapToGlobal(pos))
+
+        widget.customContextMenuRequested.connect(_show_menu)
+
+    def _toggle_fmt(self, gi, field, prop, widget):
+        fmt = self._get_cell_fmt(gi, field)
+        fmt[prop] = not fmt[prop]
+        self._apply_cell_fmt(widget, gi, field)
+
+    def _change_font_size(self, gi, field, delta, widget):
+        fmt = self._get_cell_fmt(gi, field)
+        fmt["font_size"] = max(8, min(24, fmt["font_size"] + delta))
+        self._apply_cell_fmt(widget, gi, field)
+
+    def _reset_font_size(self, gi, field, widget):
+        fmt = self._get_cell_fmt(gi, field)
+        fmt["font_size"] = self._DEFAULT_FONT_SIZE
+        self._apply_cell_fmt(widget, gi, field)
+
+    def _set_cell_font_family(self, gi, field, family, widget):
+        """Set the font family for a single cell."""
+        fmt = self._get_cell_fmt(gi, field)
+        fmt["font_family"] = family
+        self._apply_cell_fmt(widget, gi, field)
+
+    def _pick_color(self, gi, field, prop, widget):
+        fmt = self._get_cell_fmt(gi, field)
+        current = QColor(fmt[prop]) if fmt[prop] else QColor(Qt.white)
+        color = QColorDialog.getColor(current, self, "Choose Color")
+        if color.isValid():
+            fmt[prop] = color.name()
+            self._apply_cell_fmt(widget, gi, field)
+
+    def _reset_color(self, gi, field, prop, widget):
+        fmt = self._get_cell_fmt(gi, field)
+        fmt[prop] = ""
+        self._apply_cell_fmt(widget, gi, field)
+
+    def _reset_all_fmt(self, gi, field, widget):
+        key = (gi, field)
+        self._cell_formatting[key] = {
+            "bold": False, "underline": False,
+            "font_size": self._DEFAULT_FONT_SIZE,
+            "font_family": "",
+            "text_color": "", "bg_color": "",
+        }
+        widget.setStyleSheet("")
+
+    # ===================== Multi-cell selection for bulk formatting
+    _SELECTION_BORDER = "2px solid #2563EB"
+
+    def _toggle_cell_selection(self, gi, field):
+        """Toggle cell selection (Ctrl+Click). Adds/removes from selected set."""
+        key = (gi, field)
+        if key in self._selected_cells:
+            self._selected_cells.discard(key)
+        else:
+            self._selected_cells.add(key)
+        self._highlight_selected_cells()
+
+    def _select_range(self, gi_start, field_start, gi_end, field_end):
+        """Select a rectangular range of cells (Shift+Click)."""
+        self._selected_cells.clear()
+        fi_start = self._FIELD_ORDER.index(field_start) if field_start in self._FIELD_ORDER else 0
+        fi_end = self._FIELD_ORDER.index(field_end) if field_end in self._FIELD_ORDER else len(self._FIELD_ORDER) - 1
+        gi_s, gi_e = min(gi_start, gi_end), max(gi_start, gi_end)
+        fi_s, fi_e = min(fi_start, fi_end), max(fi_start, fi_end)
+        for gi in range(gi_s, gi_e + 1):
+            for fi in range(fi_s, fi_e + 1):
+                self._selected_cells.add((gi, self._FIELD_ORDER[fi]))
+        self._highlight_selected_cells()
+    
+    def _select_all_cells(self):
+        """Select every editable cell in the invoice."""
+        self._selected_cells.clear()
+        for gi in range(len(self._items)):
+            for field in self._FIELD_ORDER:
+                self._selected_cells.add((gi, field))
+        self._highlight_selected_cells()
+
+    def _clear_selection(self):
+        """Clear all cell selections."""
+        self._selected_cells.clear()
+        self._highlight_selected_cells()
+
+    def _highlight_selected_cells(self):
+        """Visually highlight all selected cells with a blue border."""
+        for gi, wd in self._row_widgets.items():
+            for fname in self._FIELD_ORDER:
+                wid = wd.get(fname)
+                if wid is None:
+                    continue
+                fmt = self._get_cell_fmt(gi, fname)
+                # Rebuild stylesheet: formatting + selection border
+                parts = []
+                parts.append(f"font-size: {fmt['font_size']}px;")
+                if fmt.get("font_family"):
+                    parts.append(f"font-family: '{fmt['font_family']}';")
+                if fmt["bold"]:
+                    parts.append("font-weight: bold;")
+                if fmt["underline"]:
+                    parts.append("text-decoration: underline;")
+                if fmt["text_color"]:
+                    parts.append(f"color: {fmt['text_color']};")
+                if fmt["bg_color"]:
+                    parts.append(f"background: {fmt['bg_color']};")
+                if (gi, fname) in self._selected_cells:
+                    parts.append(f"border: {self._SELECTION_BORDER}; border-radius: 4px;")
+                else:
+                    parts.append("border: none;")
+                wid.setStyleSheet(" ".join(parts))
+
+    def _get_selected_or_active(self):
+        """Return the set of (gi, field) tuples — selected cells or just the active cell."""
+        if self._selected_cells:
+            return self._selected_cells
+        # Fallback: single active cell
+        gi = self._active_gi
+        if gi >= 0 and gi < len(self._items):
+            # Determine which field has focus
+            wd = self._row_widgets.get(gi, {})
+            for fname in self._FIELD_ORDER:
+                wid = wd.get(fname)
+                if wid and wid.hasFocus():
+                    return {(gi, fname)}
+        return set()
+
+    def _apply_to_selected(self, prop, value=None):
+        """Apply a formatting property to all selected cells (or active cell).
+
+        For boolean props (bold/underline) value=None means toggle.
+        For font_size, pass value as the new size.
+        For font_family, pass the family name string.
+        For text_color/bg_color, pass value as the color string.
+        """
+        targets = self._get_selected_or_active()
+        if not targets:
+            return
+        for gi, fname in targets:
+            wd = self._row_widgets.get(gi)
+            if not wd:
+                continue
+            widget = wd.get(fname)
+            if not widget:
+                continue
+            fmt = self._get_cell_fmt(gi, fname)
+            if prop in ("bold", "underline"):
+                fmt[prop] = not fmt[prop] if value is None else bool(value)
+            elif prop == "font_size":
+                fmt["font_size"] = max(8, min(24, value))
+            elif prop == "font_family":
+                fmt["font_family"] = value or ""
+            elif prop in ("text_color", "bg_color"):
+                fmt[prop] = value or ""
+            elif prop == "reset":
+                self._cell_formatting.pop((gi, fname), None)
+            self._apply_cell_fmt(widget, gi, fname)
+        self._highlight_selected_cells()
+
     # ===================== PART D+E: Event filter — DnD + keyboard shortcuts
-    _FIELD_ORDER = ["desc", "size", "qty", "rate", "amt"]
+    _FIELD_ORDER = ("desc", "size", "qty", "rate", "amt")
 
     def eventFilter(self, obj, ev):
         # --- PART E: Keyboard shortcuts for cell widgets ---
@@ -1152,11 +2157,22 @@ class InvoiceEditor(QWidget):
             key = ev.key()
             mods = ev.modifiers()
 
-            # Enter → move to next row / create new row at end
+            # Enter → smart field navigation
+            # Rate → Amount (same row), Amount → new row, others → next row
             if key in (Qt.Key_Return, Qt.Key_Enter):
                 for gi, wd in self._row_widgets.items():
                     if obj in (wd["desc"], wd["size"], wd["qty"], wd["rate"], wd["amt"]):
                         self._active_gi = gi
+                        # Rate field → jump to Amount field of same row
+                        if obj is wd["rate"]:
+                            wd["amt"].setFocus()
+                            wd["amt"].selectAll()
+                            return True
+                        # Amount field → always add new row in same area
+                        if obj is wd["amt"]:
+                            self._add_item_to_area(self._items[gi].get("area") or "OTHER")
+                            return True
+                        # Other fields (desc, size, qty) → move to next row
                         nxt = gi + 1
                         if nxt < len(self._items):
                             nw = self._row_widgets.get(nxt)
@@ -1244,6 +2260,20 @@ class InvoiceEditor(QWidget):
                 self._duplicate_row()
                 return True
 
+            # Ctrl+B → toggle bold on selected cells (or current cell)
+            elif key == Qt.Key_B and mods & Qt.ControlModifier:
+                targets = self._get_selected_or_active()
+                if targets:
+                    self._apply_to_selected("bold")
+                    return True
+
+            # Ctrl+U → toggle underline on selected cells (or current cell)
+            elif key == Qt.Key_U and mods & Qt.ControlModifier:
+                targets = self._get_selected_or_active()
+                if targets:
+                    self._apply_to_selected("underline")
+                    return True
+
             # Ctrl+C → copy current row to clipboard
             elif key == Qt.Key_C and mods & Qt.ControlModifier:
                 for gi, wd in self._row_widgets.items():
@@ -1279,6 +2309,10 @@ class InvoiceEditor(QWidget):
                 self._move(1)
                 return True
 
+            # Ctrl+A → standard select-all text (do NOT hijack it for deletion)
+            elif key == Qt.Key_A and mods & Qt.ControlModifier:
+                return False
+
             # F1 → show keyboard shortcuts help
             elif key == Qt.Key_F1:
                 self._show_shortcuts_help()
@@ -1300,6 +2334,27 @@ class InvoiceEditor(QWidget):
                     obj._drag_row = idx.row()
                 else:
                     obj._drag_row = -1
+
+        # --- Ctrl+Click: multi-cell selection on cell widgets ---
+        elif ev.type() == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton and (ev.modifiers() & Qt.ControlModifier):
+            for gi, wd in self._row_widgets.items():
+                for fname in self._FIELD_ORDER:
+                    if obj is wd[fname]:
+                        self._toggle_cell_selection(gi, fname)
+                        return True
+
+        # --- Shift+Click: range selection on cell widgets ---
+        elif ev.type() == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton and (ev.modifiers() & Qt.ShiftModifier):
+            for gi, wd in self._row_widgets.items():
+                for fname in self._FIELD_ORDER:
+                    if obj is wd[fname]:
+                        if self._selected_cells:
+                            # Extend from last selected cell
+                            last_gi, last_field = max(self._selected_cells)
+                            self._select_range(last_gi, last_field, gi, fname)
+                        else:
+                            self._toggle_cell_selection(gi, fname)
+                        return True
 
         elif ev.type() == QEvent.DragEnter:
             if hasattr(obj, '_drag_row') and ev.mimeData().hasText():
@@ -1337,8 +2392,7 @@ class InvoiceEditor(QWidget):
                 return True
 
         # --- Right-click context menu on tables ---
-        elif ev.type() == QEvent.ContextMenu:
-            if hasattr(obj, '_drag_row'):  # It's our table
+        elif ev.type() == QEvent.ContextMenu and hasattr(obj, '_drag_row'):
                 idx = obj.indexAt(ev.pos())
                 if idx.isValid():
                     gi = self._gi_from_table_row(obj, idx.row())
@@ -1352,12 +2406,69 @@ class InvoiceEditor(QWidget):
     def _show_row_context_menu(self, table, global_pos, gi):
         """Show a right-click context menu for a row."""
         menu = QMenu(self)
-        menu.setStyleSheet(
-            "QMenu { background: white; border: 1px solid #D7DEE9; border-radius: 8px; padding: 4px; }"
-            "QMenu::item { padding: 8px 20px; border-radius: 6px; }"
-            "QMenu::item:selected { background: #EFF3FA; color: #173560; }"
-        )
+        menu.setStyleSheet(self._menu_qss())
         area = self._items[gi].get("area", "OTHER")
+
+        # --- Font formatting submenu (applies to selected cells or all in this row) ---
+        fmt_menu = menu.addMenu("\U0001F524  Format")
+        n_sel = len(self._selected_cells)
+        if n_sel > 0:
+            fmt_menu.setTitle(f"\U0001F524  Format  ({n_sel} cells)")
+        else:
+            fmt_menu.setTitle("\U0001F524  Format Row")
+
+        act_bold = fmt_menu.addAction("B  Bold  (Ctrl+B)")
+        f_bold = QFont(); f_bold.setBold(True); act_bold.setFont(f_bold)
+        act_bold.triggered.connect(lambda: self._apply_to_selected("bold"))
+
+        act_ul = fmt_menu.addAction("U  Underline  (Ctrl+U)")
+        f_ul = QFont(); f_ul.setUnderline(True); act_ul.setFont(f_ul)
+        act_ul.triggered.connect(lambda: self._apply_to_selected("underline"))
+
+        fmt_menu.addSeparator()
+
+        # --- Font Family (bulk) ---
+        fam_menu = fmt_menu.addMenu("\U0001F4DD  Font Family")
+        for label, family in self._FONT_FAMILIES:
+            act_fam = fam_menu.addAction(label)
+            act_fam.triggered.connect(lambda _, f=family: self._apply_to_selected("font_family", f))
+        fam_menu.addSeparator()
+        act_fam_reset = fam_menu.addAction("\u21BA  Reset Font Family")
+        act_fam_reset.triggered.connect(lambda: self._apply_to_selected("font_family", ""))
+
+        fmt_menu.addSeparator()
+
+        act_inc = fmt_menu.addAction("\U0001F50D+  Increase Font Size")
+        act_inc.triggered.connect(self._increase_selected_font_size)
+        act_dec = fmt_menu.addAction("\U0001F50D\u2212  Decrease Font Size")
+        act_dec.triggered.connect(self._decrease_selected_font_size)
+        act_reset_size = fmt_menu.addAction("\u21BA  Reset Font Size")
+        act_reset_size.triggered.connect(lambda: self._apply_to_selected("font_size", self._DEFAULT_FONT_SIZE))
+
+        fmt_menu.addSeparator()
+
+        act_tc = fmt_menu.addAction("\U0001F3A8  Text Color...")
+        act_tc.triggered.connect(self._pick_color_for_selected)
+        act_tc_reset = fmt_menu.addAction("\u21BA  Reset Text Color")
+        act_tc_reset.triggered.connect(lambda: self._apply_to_selected("text_color", ""))
+
+        fmt_menu.addSeparator()
+
+        act_bg = fmt_menu.addAction("\U0001F58C\uFE0F  Background Color...")
+        act_bg.triggered.connect(self._pick_bg_for_selected)
+        act_bg_reset = fmt_menu.addAction("\u21BA  Reset Background")
+        act_bg_reset.triggered.connect(lambda: self._apply_to_selected("bg_color", ""))
+
+        fmt_menu.addSeparator()
+
+        act_reset = fmt_menu.addAction("\u2715  Reset All Formatting")
+        act_reset.triggered.connect(lambda: self._apply_to_selected("reset"))
+
+        act_clear_sel = fmt_menu.addAction("\u21BA  Clear Selection")
+        act_clear_sel.triggered.connect(self._clear_selection)
+        act_clear_sel.setEnabled(n_sel > 0)
+
+        menu.addSeparator()
 
         act_copy = menu.addAction("\u2398  Copy Row  (Ctrl+C)")
         act_copy.triggered.connect(lambda: self._copy_row(gi))
@@ -1372,9 +2483,9 @@ class InvoiceEditor(QWidget):
 
         menu.addSeparator()
 
-        act_up = menu.addAction(f"\u25B2  Move Up")
+        act_up = menu.addAction("\u25B2  Move Up")
         act_up.triggered.connect(lambda: self._move(-1))
-        act_down = menu.addAction(f"\u25BC  Move Down")
+        act_down = menu.addAction("\u25BC  Move Down")
         act_down.triggered.connect(lambda: self._move(1))
 
         menu.addSeparator()
@@ -1383,7 +2494,7 @@ class InvoiceEditor(QWidget):
         areas = [a.name for a in catalog_service.list_areas() if a.name != "+"]
         other_areas = [a for a in areas if a != area]
         if other_areas:
-            move_menu = menu.addMenu(f"\u2192  Move to Area")
+            move_menu = menu.addMenu("\u2192  Move to Area")
             for target_area in other_areas:
                 act = move_menu.addAction(target_area)
                 act.triggered.connect(lambda _, t=target_area: self._move_to_area(gi, t))
@@ -1394,6 +2505,42 @@ class InvoiceEditor(QWidget):
         act_del.triggered.connect(lambda: self._delete_row(gi))
 
         menu.exec(global_pos)
+
+    def _increase_selected_font_size(self):
+        targets = self._get_selected_or_active()
+        for gi, fname in targets:
+            fmt = self._get_cell_fmt(gi, fname)
+            self._apply_to_selected("font_size", max(8, min(24, fmt["font_size"] + 1)))
+            break  # all get the same delta
+
+    def _decrease_selected_font_size(self):
+        targets = self._get_selected_or_active()
+        for gi, fname in targets:
+            fmt = self._get_cell_fmt(gi, fname)
+            self._apply_to_selected("font_size", max(8, min(24, fmt["font_size"] - 1)))
+            break
+
+    def _pick_color_for_selected(self):
+        targets = self._get_selected_or_active()
+        if not targets:
+            return
+        gi, fname = next(iter(targets))
+        fmt = self._get_cell_fmt(gi, fname)
+        current = QColor(fmt["text_color"]) if fmt["text_color"] else QColor(Qt.white)
+        color = QColorDialog.getColor(current, self, "Choose Text Color")
+        if color.isValid():
+            self._apply_to_selected("text_color", color.name())
+
+    def _pick_bg_for_selected(self):
+        targets = self._get_selected_or_active()
+        if not targets:
+            return
+        gi, fname = next(iter(targets))
+        fmt = self._get_cell_fmt(gi, fname)
+        current = QColor(fmt["bg_color"]) if fmt["bg_color"] else QColor(Qt.white)
+        color = QColorDialog.getColor(current, self, "Choose Background Color")
+        if color.isValid():
+            self._apply_to_selected("bg_color", color.name())
 
     def _move_to_area(self, gi, target_area):
         """Move a row from its current area to another area."""
@@ -1458,9 +2605,9 @@ class InvoiceEditor(QWidget):
 
     def _update_area_totals(self, area_totals):
         for sw in self._sections:
-            area = sw._heading.text().strip("— ")
+            area = sw._heading.text().strip("\u2014 ")
             amt = area_totals.get(area, 0.0)
-            sw._total_label.setText(f"{area} TOTAL   \u20B9 {amt:,.2f}")
+            sw._total_label.setText(f"\u20B9 {amt:,.2f}")
 
     # ============================================================ row ops
     def _add_item_to_area(self, area):
@@ -1478,12 +2625,22 @@ class InvoiceEditor(QWidget):
                 insert_at = gi + 1
                 break
         self._items.insert(insert_at, row_d)
-        self._rebuild_sections()
+        self._rebuild_from_index(insert_at)
+        self._recalc()
         self._active_gi = insert_at
         self._mark_dirty()
         w = self._row_widgets.get(insert_at)
         if w:
             w["desc"].setFocus()
+            # Auto-show suggestion dropdown for the area's items
+            completer = w["desc"].completer()
+            if completer:
+                # Refresh the completer model then trigger the popup
+                if hasattr(w["desc"], "_refresh_completer"):
+                    w["desc"]._refresh_completer()
+                completer.setCompletionPrefix("")
+                w["desc"].setText("")
+                completer.complete()
 
     def _add_new_area(self):
         from PySide6.QtWidgets import QInputDialog
@@ -1511,7 +2668,8 @@ class InvoiceEditor(QWidget):
         self._push_undo("duplicate row")
         src = dict(self._items[gi])
         self._items.insert(gi + 1, src)
-        self._rebuild_sections()
+        self._rebuild_from_index(gi + 1)
+        self._recalc()
         self._active_gi = gi + 1
         self._mark_dirty()
 
@@ -1537,9 +2695,11 @@ class InvoiceEditor(QWidget):
                 QMessageBox.Yes | QMessageBox.No) != QMessageBox.Yes:
             return
         desc = self._items[r].get("description", "") or f"row {r+1}"
+        del_area = self._items[r].get("area", "OTHER") if r < len(self._items) else None
         self._push_undo(f"delete '{desc}'")
         self._items.pop(r)
-        self._rebuild_sections()
+        self._rebuild_from_index(r, area=del_area)
+        self._recalc()
         self._mark_dirty()
 
     def _edit_row(self, gi):
@@ -1580,19 +2740,19 @@ class InvoiceEditor(QWidget):
     def _on_qty_changed(self, gi, text):
         if gi < len(self._items):
             self._items[gi]["qty_raw"] = text
-            self._recalc()
+            self._recalc_soon()
             self._mark_dirty()
 
     def _on_rate_changed(self, gi, text):
         if gi < len(self._items):
             self._items[gi]["rate_raw"] = text
-            self._recalc()
+            self._recalc_soon()
             self._mark_dirty()
 
     def _on_amount_changed(self, gi, text):
         if gi < len(self._items):
             self._items[gi]["amount"] = text
-            self._recalc()
+            self._recalc_soon()
             self._mark_dirty()
 
     def _on_gst_toggled(self, checked):
@@ -1601,16 +2761,27 @@ class InvoiceEditor(QWidget):
 
     def _apply_discount_pct(self, pct):
         """Apply a percentage discount based on current subtotal."""
-        computed, subtotal = calc.compute_rows(self._items)
+        _computed, subtotal = calc.compute_rows(self._items)
         disc = round(subtotal * pct / 100.0, 2)
         self.f_discount.setValue(disc)
         self._mark_dirty()
         show_toast(self, f"{pct}% discount applied (\u20B9 {disc:,.2f})", "info")
 
     # ============================================================ calc
+    def _recalc_soon(self):
+        """Debounced recalculation used while typing in qty/rate/amount.
+
+        Full invoice recalculation on every keystroke causes input lag with
+        many items. This (re)starts a short single-shot timer so the totals,
+        area totals, quick stats and progress bars update shortly after the
+        user pauses typing.
+        """
+        self._skip_progress = True  # skip progress update during typing
+        self._recalc_timer.start()
+
     def _recalc(self):
         computed, subtotal = calc.compute_rows(self._items)
-        disc = self.f_discount.value()
+        disc = min(self.f_discount.value(), subtotal)
         gst_rate = self.f_gst.value() if self.cb_gst.isChecked() else 0
         totals = calc.apply_gst(subtotal, disc, gst_rate)
         area_totals = calc.compute_area_totals(self._items)
@@ -1622,33 +2793,50 @@ class InvoiceEditor(QWidget):
                 continue
             q = self._items[i].get("qty_raw", "")
             rt = self._items[i].get("rate_raw", "")
-            numeric = calc.is_number(q) and calc.is_number(rt)
+            qn = calc.is_number(q)
+            rn = calc.is_number(rt)
+            manual = (not qn) and (not rn)  # LS/LS → user types the amount by hand
             try:
-                w["amt"].setReadOnly(numeric)
-            except Exception:
-                numeric = False
-            if numeric and amt is not None:
-                old = w["amt"].text()
+                w["amt"].setReadOnly(not manual)
+            except Exception:  # noqa: BLE001
+                manual = True
+            if amt is not None and not manual:
                 new = _fmt(amt)
-                if old != new:
+                if w["amt"].text() != new:
+                    w["amt"].blockSignals(True)
                     w["amt"].setText(new)
+                    w["amt"].blockSignals(False)
 
         self._sum_row_set(self.l_subtotal, _money(totals["subtotal"]))
         self._sum_row_set(self.l_discount, "-\u20B9 {:,.2f}".format(totals["discount"]))
         self._sum_row_set(self.l_taxable, _money(taxable))
+        gst_frame = getattr(self.l_gst, "_stat_frame", None) or self.l_gst
         if self.cb_gst.isChecked():
             self._sum_row_set(self.l_gst, _money(totals["gst_amount"]))
             self.l_gst.setVisible(True)
+            gst_frame.setVisible(True)
         else:
             self._sum_row_set(self.l_gst, "\u20B9 0.00")
             self.l_gst.setVisible(False)
+            gst_frame.setVisible(False)
 
         self.l_grand.setText(_money(totals["grand_total"]))
         self.l_words.setText(calc.amount_in_words(totals["grand_total"]))
         self._update_area_totals(area_totals)
+        # Update quick stats bar
+        self._update_quick_stats(computed, totals)
+        # Update progress indicator only when not triggered by typing debounce
+        if not getattr(self, '_skip_progress', False):
+            self._update_progress()
+        self._skip_progress = False
 
     # ============================================================ save
     def _save(self, status):
+        # Commit any pending debounced recalculation so totals are up to date.
+        if self._recalc_timer.isActive():
+            self._recalc_timer.stop()
+            self._recalc()
+
         cid = self.f_customer.currentData()
         if not cid:
             QMessageBox.warning(self, "Customer required",
@@ -1673,14 +2861,42 @@ class InvoiceEditor(QWidget):
                 "rate_raw": rt,
                 "amount": float(amt) if calc.is_number(amt) else None,
             })
+        if status != "DRAFT" and not items:
+            QMessageBox.warning(self, "No items",
+                                "Please add at least one item before saving.")
+            return
 
+        # Warn about LS items that have no manual AMOUNT (they would silently
+        # save as 0). Only enforced on final saves, not while drafting.
+        if status != "DRAFT":
+            ls_missing = [
+                (i + 1, it.get("description") or "(no description)")
+                for i, it in enumerate(items)
+                if (not calc.is_number(it.get("qty_raw", ""))
+                    and not calc.is_number(it.get("rate_raw", ""))
+                    and it.get("amount") is None)
+            ]
+            if ls_missing:
+                shown = "; ".join(f"#{n} {d}" for n, d in ls_missing[:8])
+                if len(ls_missing) > 8:
+                    shown += f" (+{len(ls_missing) - 8} more)"
+                reply = QMessageBox.warning(
+                    self, "LS items missing amount",
+                    f"{len(ls_missing)} item(s) have LS in QTY/RATE but no "
+                    f"manual AMOUNT. So save par inke liye amount 0 (zero) "
+                    f"hoga.\n\n{shown}\n\nPhir bhi save karein?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if reply != QMessageBox.Yes:
+                    return
+
+        subtotal_now = calc.compute_rows([{"qty_raw": it.get("qty_raw"), "rate_raw": it.get("rate_raw"), "amount": it.get("amount")} for it in items])[1]
         data = {
             "customer_id": cid,
             "project_id": None,
             "invoice_date": self.f_date.date().toPython(),
             "due_date": self.f_due.date().toPython(),
             "site_address": self.f_site_addr.text().strip(),
-            "discount": self.f_discount.value(),
+            "discount": min(self.f_discount.value(), subtotal_now),
             "gst_enabled": self.cb_gst.isChecked(),
             "gst_rate": self.f_gst.value() if self.cb_gst.isChecked() else 0,
             "status": status,
@@ -1702,6 +2918,10 @@ class InvoiceEditor(QWidget):
                 show_toast(self, f"Invoice {inv.invoice_number} saved.", "success")
             self._mark_clean()
             self._undo_stack.clear()
+            # Show WhatsApp and Print buttons after successful save
+            if self.invoice:
+                self.btn_whatsapp.setVisible(True)
+                self.btn_print_direct.setVisible(True)
             if self.on_close_callback:
                 self.on_close_callback(refresh=True)
         except Exception as e:  # noqa: BLE001
@@ -1720,7 +2940,7 @@ class InvoiceEditor(QWidget):
             if cid:
                 try:
                     self._save("DRAFT")
-                except Exception:  # noqa: BLE001
+                except Exception:  # noqa: BLE001, S110
                     pass
         inv_id = self.get_invoice_id()
         if not inv_id:
@@ -1770,14 +2990,14 @@ class QTextEditBox(QWidget):
 
 # ========================== PART F: Improved item picker ==========================
 def make_suggestion_lineedit(base: QLineEdit, gi: int, area: str,
-                             editor: "InvoiceEditor") -> QLineEdit:
+                             editor: InvoiceEditor) -> QLineEdit:
     """Searchable + custom-entry description with area-aware autocomplete.
 
     Shows matching items grouped by area, with an "＋ Add custom item" option
     when the typed text doesn't match any existing item. Free-typing is always
     allowed — the custom item option is just a convenience hint.
     """
-    from PySide6.QtCore import QStringListModel, QEvent, QObject
+    from PySide6.QtCore import QStringListModel
     from PySide6.QtWidgets import QCompleter
 
     completer = QCompleter(base)

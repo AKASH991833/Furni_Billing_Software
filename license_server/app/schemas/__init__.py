@@ -1,0 +1,38 @@
+"""Schemas package."""
+from app.schemas.schemas import (
+    ActionDetailRequest,
+    ActivationRequest,
+    ActivationResponse,
+    ClientDeactivateRequest,
+    CustomerCreate,
+    CustomerOut,
+    CustomerSearch,
+    DeactivateRequest,
+    DeactivateResponse,
+    LicenseCreate,
+    LicenseEventOut,
+    LicenseOut,
+    LicenseStatusResponse,
+    LicenseUpdate,
+    ValidateRequest,
+    ValidateResponse,
+)
+
+__all__ = [
+    "ActionDetailRequest",
+    "ActivationRequest",
+    "ActivationResponse",
+    "ClientDeactivateRequest",
+    "CustomerCreate",
+    "CustomerOut",
+    "CustomerSearch",
+    "DeactivateRequest",
+    "DeactivateResponse",
+    "LicenseCreate",
+    "LicenseEventOut",
+    "LicenseOut",
+    "LicenseStatusResponse",
+    "LicenseUpdate",
+    "ValidateRequest",
+    "ValidateResponse",
+]

@@ -3,10 +3,18 @@
 Uses SQLAlchemy with an SQLite backend. WAL mode is enabled for fast,
 concurrent reads and a short startup time. Each instance owns its own DB
 file under the OS app-data directory.
+
+Performance PRAGMAs applied at connection time:
+  - WAL journal mode (concurrent readers, fast writes)
+  - synchronous=NORMAL (fast writes with WAL safety)
+  - cache_size=-64000 (64 MB page cache)
+  - mmap_size=268435456 (256 MB memory-mapped I/O)
+  - temp_store=MEMORY (temp tables in RAM)
+  - foreign_keys=ON (referential integrity)
+  - busy_timeout=15000 (avoid lock errors under contention)
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
 from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, event
@@ -27,14 +35,28 @@ def init_db(db_file: Path | None = None) -> Engine:
         f"sqlite:///{target}",
         connect_args={"check_same_thread": False, "timeout": 15},
         echo=False,
+        pool_pre_ping=False,
     )
 
     @event.listens_for(_engine, "connect")
-    def _set_sqlite_pragma(dbapi_connection, connection_record):  # noqa: ANN001
+    def _set_sqlite_pragma(dbapi_connection, connection_record):
         cursor = dbapi_connection.cursor()
+        # Performance: WAL mode allows concurrent reads during writes
         cursor.execute("PRAGMA journal_mode=WAL")
+        # Performance: NORMAL is fast; FULL is only needed without WAL
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        # Performance: 64 MB page cache (default is 2 MB)
+        cursor.execute("PRAGMA cache_size=-64000")
+        # Performance: 256 MB memory-mapped I/O for faster reads
+        cursor.execute("PRAGMA mmap_size=268435456")
+        # Performance: store temp tables in memory
+        cursor.execute("PRAGMA temp_store=MEMORY")
+        # Integrity: enforce foreign key constraints
         cursor.execute("PRAGMA foreign_keys=ON")
+        # Reliability: 15s busy timeout avoids lock errors
         cursor.execute("PRAGMA busy_timeout=15000")
+        # Performance: store user_version for lightweight migration checks
+        cursor.execute("PRAGMA user_version=2")
         cursor.close()
 
     _SessionLocal = sessionmaker(
@@ -47,20 +69,6 @@ def get_engine() -> Engine:
     if _engine is None:
         return init_db()
     return _engine
-
-
-@contextmanager
-def session_scope():
-    """Provide a transactional scope around a series of operations."""
-    s: Session = _SessionLocal()
-    try:
-        yield s
-        s.commit()
-    except Exception:
-        s.rollback()
-        raise
-    finally:
-        s.close()
 
 
 def get_session() -> Session:

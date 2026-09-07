@@ -1,0 +1,2 @@
+# Build-time dependencies for producing the desktop .exe (not runtime).
+pyinstaller>=6.0

@@ -1,11 +1,12 @@
 """Customer management service."""
 from __future__ import annotations
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.database.database import get_session
 from app.models.models import Customer, Invoice, Payment
-from sqlalchemy.orm import joinedload, selectinload
+from app.utils.cache import cache
 
 
 def add_customer(data: dict) -> Customer:
@@ -23,7 +24,7 @@ def add_customer(data: dict) -> Customer:
 def update_customer(customer_id: int, data: dict) -> Customer:
     session = get_session()
     try:
-        c = session.query(Customer).get(customer_id)
+        c = session.get(Customer, customer_id)
         if c:
             for k, v in data.items():
                 setattr(c, k, v)
@@ -36,10 +37,13 @@ def update_customer(customer_id: int, data: dict) -> Customer:
 def delete_customer(customer_id: int) -> bool:
     session = get_session()
     try:
-        c = session.query(Customer).get(customer_id)
+        c = session.get(Customer, customer_id)
         if c:
             session.delete(c)
             session.commit()
+            cache.invalidate("dashboard_stats")
+            cache.invalidate_prefix("recent_")
+            cache.invalidate_prefix("monthly_")
             return True
         return False
     finally:
@@ -49,7 +53,7 @@ def delete_customer(customer_id: int) -> bool:
 def get_customer(customer_id: int) -> Customer | None:
     session = get_session()
     try:
-        return session.query(Customer).get(customer_id)
+        return session.get(Customer, customer_id)
     finally:
         session.close()
 
@@ -87,26 +91,47 @@ def customer_invoices(customer_id: int) -> list[Invoice]:
 
 
 def customer_totals(customer_id: int) -> dict:
-    """Total invoiced, total paid, outstanding for a customer."""
+    """Total invoiced, total paid, outstanding for a customer.
+
+    Uses pure SQL aggregation — no objects loaded into Python.
+    Results are cached for 30s to avoid repeated expensive queries.
+    """
+    cache_key = f"cust_totals:{customer_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+
     session = get_session()
     try:
-        invoices = (
-            session.query(Invoice)
+        # Sum of all non-DRAFT invoice grand_totals for this customer
+        total_invoiced = (
+            session.query(func.coalesce(func.sum(Invoice.grand_total), 0))
             .filter(Invoice.customer_id == customer_id, Invoice.status != "DRAFT")
-            .options(selectinload(Invoice.payments))
-            .all()
+            .scalar() or 0
         )
-        total_invoiced = sum(float(i.grand_total or 0) for i in invoices)
-        total_paid = 0.0
-        for i in invoices:
-            for p in i.payments:
-                total_paid += float(p.amount or 0)
-        return {
-            "total_invoiced": total_invoiced,
-            "total_paid": total_paid,
-            "outstanding": total_invoiced - total_paid,
-            "invoice_count": len(invoices),
+        # Count of non-DRAFT invoices
+        invoice_count = (
+            session.query(func.count(Invoice.id))
+            .filter(Invoice.customer_id == customer_id, Invoice.status != "DRAFT")
+            .scalar() or 0
+        )
+        # Sum of all payments against this customer's invoices
+        total_paid = (
+            session.query(func.coalesce(func.sum(Payment.amount), 0))
+            .join(Invoice, Payment.invoice_id == Invoice.id)
+            .filter(Invoice.customer_id == customer_id, Invoice.status != "DRAFT")
+            .scalar() or 0
+        )
+        total_invoiced_f = float(total_invoiced)
+        total_paid_f = float(total_paid)
+        result = {
+            "total_invoiced": total_invoiced_f,
+            "total_paid": total_paid_f,
+            "outstanding": total_invoiced_f - total_paid_f,
+            "invoice_count": int(invoice_count),
         }
+        cache.set(cache_key, result, ttl=30)
+        return result
     finally:
         session.close()
 

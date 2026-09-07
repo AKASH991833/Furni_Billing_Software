@@ -48,3 +48,11 @@ def resources_dir() -> Path:
 
 def icons_dir() -> Path:
     return resources_dir() / "icons"
+
+
+def images_dir() -> Path:
+    return resources_dir() / "images"
+
+
+def login_background_path() -> Path:
+    return images_dir() / "login_background.png"

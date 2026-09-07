@@ -5,28 +5,29 @@ in later steps; the editor itself is fully functional here.
 """
 from __future__ import annotations
 
-from datetime import date
-
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
-    QMessageBox,
 )
 
 from app.services import invoice_service
-from app.services.invoice_service import invoice_status, invoice_outstanding
+from app.services.invoice_service import compute_status, get_invoice_status
 from app.ui.pages.base_page import BasePage
 from app.ui.pages.invoice_editor import InvoiceEditor
-from app.ui.widgets.common import primary_button, show_toast
-from app.ui.style import PRIMARY, SUCCESS, WARNING, DANGER
+from app.ui.widgets.common import show_toast
+
+
 def _money(v) -> str:
     return f"\u20B9 {float(v or 0):,.2f}"
 
@@ -53,18 +54,29 @@ class InvoicesPage(BasePage):
 
     def _build_list(self):
         lv = self.list_view
-        lv.setContentsMargins(24, 20, 24, 20)
-        lv.setSpacing(16)
+        lv.setContentsMargins(28, 22, 28, 22)
+        lv.setSpacing(14)
 
+        # --- Search + Filter + New Invoice (glass toolbar) ---
         top = QHBoxLayout()
+        top.setSpacing(10)
         self.search = QLineEdit()
+        self.search.setObjectName("invoiceSearch")
         self.search.setPlaceholderText("Search by invoice no, customer, mobile...")
-        self.search.setFixedWidth(300)
+        self.search.setFixedWidth(320)
+        # Debounce search — fire query only after user pauses typing
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(250)
+        self._search_timer.timeout.connect(self._load)
         self.search.textChanged.connect(self._search)
         self.status_filter = QComboBox()
+        self.status_filter.setObjectName("invoiceStatusFilter")
         self.status_filter.addItems(["All", "Saved", "Draft", "PAID", "PARTIALLY PAID", "UNPAID", "OVERDUE"])
         self.status_filter.currentTextChanged.connect(self._search)
-        btn_new = primary_button("+ New Invoice")
+        btn_new = QPushButton("+ New Invoice")
+        btn_new.setObjectName("invoiceNewBtn")
+        btn_new.setCursor(Qt.PointingHandCursor)
         btn_new.clicked.connect(self._new_invoice)
         top.addWidget(self.search)
         top.addWidget(self.status_filter)
@@ -72,7 +84,9 @@ class InvoicesPage(BasePage):
         top.addWidget(btn_new)
         lv.addLayout(top)
 
+        # --- Invoice table (glass depth) ---
         self.table = QTableWidget(0, 6)
+        self.table.setObjectName("invoiceTable")
         self.table.setHorizontalHeaderLabels(["Invoice No", "Customer", "Date", "Status", "Amount", "Outstanding"])
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
@@ -82,28 +96,57 @@ class InvoicesPage(BasePage):
         self.table.cellDoubleClicked.connect(lambda r, c: self._edit_row(r))
         self.table.itemSelectionChanged.connect(self._selection_changed)
         self.empty_label = QLabel("No invoices yet. Click '+ New Invoice' to create one.")
+        self.empty_label.setObjectName("invoiceEmptyTitle")
         self.empty_label.setAlignment(Qt.AlignCenter)
-        self.empty_label.setStyleSheet("color:#9CA3AF; font-size:14px; padding:40px;")
         self.empty_label.setVisible(False)
         lv.addWidget(self.table, 1)
         lv.addWidget(self.empty_label)
 
-        # Actions bar for selected saved invoice
+        # --- Actions bar (glass) ---
         actions = QHBoxLayout()
-        actions.addWidget(QLabel("Actions:"))
-        self.btn_preview = QPushButton("Preview PDF")
-        self.btn_preview.clicked.connect(self._preview_pdf)
-        self.btn_save_pdf = QPushButton("Save PDF")
-        self.btn_save_pdf.clicked.connect(self._save_pdf)
-        self.btn_print = QPushButton("Print")
-        self.btn_print.clicked.connect(self._print_pdf)
+        actions.setSpacing(8)
+        actions_label = QLabel("ACTIONS")
+        actions_label.setObjectName("invoiceActionsLabel")
+        actions.addWidget(actions_label)
+
+        # --- Preview PDF dropdown ---
+        self.btn_preview = QToolButton()
+        self.btn_preview.setText("Preview PDF")
+        self.btn_preview.setObjectName("invoiceToolBtn")
+        self.btn_preview.setPopupMode(QToolButton.InstantPopup)
+        self._preview_menu = QMenu(self.btn_preview)
+        act_colour = self._preview_menu.addAction("Preview PDF")
+        act_colour.triggered.connect(self._preview_pdf)
+        self.btn_preview.setMenu(self._preview_menu)
+
+        # --- Save PDF dropdown ---
+        self.btn_save_pdf = QToolButton()
+        self.btn_save_pdf.setText("Save PDF")
+        self.btn_save_pdf.setObjectName("invoiceToolBtn")
+        self.btn_save_pdf.setPopupMode(QToolButton.InstantPopup)
+        self._save_menu = QMenu(self.btn_save_pdf)
+        act_save_colour = self._save_menu.addAction("Save PDF")
+        act_save_colour.triggered.connect(self._save_pdf)
+        self.btn_save_pdf.setMenu(self._save_menu)
+
+        # --- Print dropdown ---
+        self.btn_print = QToolButton()
+        self.btn_print.setText("Print")
+        self.btn_print.setObjectName("invoiceToolBtn")
+        self.btn_print.setPopupMode(QToolButton.InstantPopup)
+        self._print_menu = QMenu(self.btn_print)
+        act_print_colour = self._print_menu.addAction("Print")
+        act_print_colour.triggered.connect(self._print_pdf)
+        self.btn_print.setMenu(self._print_menu)
+
         self.btn_pay = QPushButton("Payments")
-        self.btn_pay.setObjectName("successButton")
+        self.btn_pay.setObjectName("invoicePayBtn")
         self.btn_pay.clicked.connect(self._payments)
         self.btn_wa = QPushButton("WhatsApp")
+        self.btn_wa.setObjectName("invoiceActionBtn")
         self.btn_wa.clicked.connect(self._whatsapp)
         self.btn_edit = QPushButton("Edit Invoice")
-        self.btn_edit.setObjectName("primaryButton")
+        self.btn_edit.setObjectName("invoiceEditBtn")
         self.btn_edit.clicked.connect(self._edit_selected)
         self._action_buttons = [self.btn_preview, self.btn_save_pdf, self.btn_print,
                                 self.btn_pay, self.btn_wa, self.btn_edit]
@@ -132,31 +175,19 @@ class InvoicesPage(BasePage):
         }.get(status)
         invoices = invoice_service.search_invoices(q, status_filter or "", 300)
         self.table.setRowCount(0)
-        self.table.setVisible(len(invoices) > 0)
-        self.empty_label.setVisible(len(invoices) == 0)
+        self.table.setVisible(False)
+        self.empty_label.setVisible(False)
         for inv in invoices:
-            r = self.table.rowCount()
-            self.table.insertRow(r)
             cust = inv.customer.name if inv.customer else "-"
-            # Compute status and outstanding in-memory (payments already loaded
-            # via selectinload in search_invoices, so no extra DB round-trips).
             total = float(inv.grand_total or 0)
             paid = sum(float(p.amount or 0) for p in (inv.payments or []))
             outstanding = max(total - paid, 0)
-            if total == 0:
-                st = "DRAFT" if inv.status == "DRAFT" else "UNPAID"
-            elif paid <= 0:
-                if inv.due_date and inv.due_date < date.today():
-                    st = "OVERDUE"
-                else:
-                    st = "UNPAID"
-            elif paid >= total:
-                st = "PAID"
-            else:
-                if inv.due_date and inv.due_date < date.today():
-                    st = "OVERDUE"
-                else:
-                    st = "PARTIALLY PAID"
+            st = compute_status(inv.grand_total, paid, inv.status, inv.due_date)
+            # Skip rows that don't match the computed status filter
+            if status not in ("All", "Saved", "Draft") and st != status:
+                continue
+            r = self.table.rowCount()
+            self.table.insertRow(r)
             vals = [inv.invoice_number, cust,
                     inv.invoice_date.strftime("%d-%b-%Y") if inv.invoice_date else "-",
                     st, _money(inv.grand_total), _money(outstanding)]
@@ -170,11 +201,14 @@ class InvoicesPage(BasePage):
                 else Qt.GlobalColor.darkRed if st in ("OVERDUE", "UNPAID")
                 else Qt.GlobalColor.darkYellow if "PART" in st
                 else Qt.GlobalColor.darkGray)
+        self.table.setVisible(self.table.rowCount() > 0)
+        self.empty_label.setVisible(self.table.rowCount() == 0)
 
     def _search(self, _=None):
         if self.editor is not None:
             return
-        self._load()
+        # Restart debounce timer — query fires after 250ms of no typing
+        self._search_timer.start()
 
     def _selection_changed(self):
         rows = self.table.selectionModel().selectedRows()
@@ -186,9 +220,9 @@ class InvoicesPage(BasePage):
             inv_id = self.table.item(row, 0).data(Qt.UserRole)
             if inv_id:
                 self._selected_invoice_id = inv_id
-                inv = invoice_service.get_invoice(inv_id)
-                is_saved = bool(inv and inv.status != "DRAFT")
-                # enable all actions for any invoice; editing always allowed
+                # Use lightweight status query instead of full eager-loaded fetch
+                db_status = get_invoice_status(inv_id)
+                is_saved = bool(db_status and db_status != "DRAFT")
                 for b in self._action_buttons:
                     b.setEnabled(True)
                 if not is_saved:
@@ -241,8 +275,6 @@ class InvoicesPage(BasePage):
             return
         self._ensure_pdf_engine()
         from app.pdf.pdf_service import PdfPreviewDialog
-        # Open the preview dialog, where the A4 PDF is loaded and the
-        # user can click the "Print..." button for native printing.
         dlg = PdfPreviewDialog(self._selected_invoice_id, self)
         dlg.exec()
 
@@ -256,30 +288,24 @@ class InvoicesPage(BasePage):
             QMessageBox.warning(self, "WhatsApp",
                                 "This customer has no mobile number saved.")
             return
-        from app.services import whatsapp_service
         from app.services.business_service import get_profile
+        from app.services.whatsapp_service import share_invoice_pdf
         profile = get_profile()
-        biz_name = profile.business_name if profile else ""
-        total = float(inv.grand_total or 0)
-        paid = total - invoice_outstanding(inv)
-        out = invoice_outstanding(inv)
-        msg = whatsapp_service.build_whatsapp_message(
-            inv.customer.name, biz_name, inv.invoice_number, total, paid, out)
         try:
-            whatsapp_service.open_whatsapp(inv.customer.mobile, msg)
-            QMessageBox.information(
-                self, "WhatsApp",
-                "WhatsApp has been opened with a pre-filled message.\n\n"
-                "Note: WhatsApp's system does not allow attaching the PDF "
-                "automatically from a local file. Please attach the invoice "
-                "PDF manually if needed (use 'Save PDF' first).")
-        except ValueError as e:
-            QMessageBox.warning(self, "WhatsApp", str(e))
+            share_invoice_pdf(
+                self,
+                inv.id,
+                inv.customer.name,
+                profile.business_name if profile else "",
+                inv.invoice_number,
+                inv.customer.mobile,
+            )
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "WhatsApp", f"Share failed: {e}")
 
     @staticmethod
     def _ensure_pdf_engine():
         from PySide6 import QtWebEngineWidgets  # noqa: F401  ensure module loaded
-        pass
 
     def _new_invoice(self):
         self._open_editor(invoice=None)
@@ -299,13 +325,11 @@ class InvoicesPage(BasePage):
         pass
 
     def _open_editor(self, invoice=None, customer_id=None):
-        # clear editor slot
         while self.editor_slot.count():
             item = self.editor_slot.takeAt(0)
             w = item.widget()
             if w:
                 w.deleteLater()
-        # hide list
         self._set_list_visible(False)
 
         self.editor = InvoiceEditor(
@@ -314,8 +338,6 @@ class InvoicesPage(BasePage):
         self.editor_slot.addWidget(self.editor)
 
     def _set_list_visible(self, visible):
-        # Toggle every widget in the list layout, including those inside
-        # nested sub-layouts (the search bar and actions bar are addLayout).
         def apply(widget):
             widget.setVisible(visible)
 
@@ -330,7 +352,6 @@ class InvoicesPage(BasePage):
         walk(self.list_view)
 
     def _on_editor_close(self, refresh=False):
-        # remove editor
         while self.editor_slot.count():
             item = self.editor_slot.takeAt(0)
             w = item.widget()

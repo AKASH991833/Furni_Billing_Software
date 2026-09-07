@@ -1,20 +1,31 @@
-"""Simple time-based cache for DB queries.
+"""Fast time-based cache with LRU eviction.
 
-Avoids repeated expensive lookups for data that changes infrequently
-(profile, areas, items). Cache entries expire after a configurable TTL.
+Uses ``collections.OrderedDict`` for O(1) LRU tracking and per-key TTL
+expiry.  The cache has a configurable maximum size (default 512 keys);
+when the limit is hit the least-recently-used entry is evicted first.
 """
 from __future__ import annotations
 
+import collections
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 class TTLCache:
-    """Thread-safe in-memory cache with per-key time-to-live expiry."""
+    """In-memory cache with per-key TTL and LRU eviction.
 
-    def __init__(self, default_ttl: float = 30.0):
+    Intended for single-threaded (Qt event-loop) use; not thread-safe.
+    """
+
+    def __init__(self, default_ttl: float = 30.0, max_size: int = 512):
         self._default_ttl = default_ttl
-        self._store: dict[str, tuple[Any, float]] = {}
+        self._max_size = max_size
+        # OrderedDict keeps insertion order — we move-to-end on access
+        # so the first key is always the LRU candidate.
+        self._store: collections.OrderedDict[str, tuple[Any, float]] = (
+            collections.OrderedDict()
+        )
 
     def get(self, key: str) -> Any | None:
         entry = self._store.get(key)
@@ -24,11 +35,18 @@ class TTLCache:
         if time.monotonic() > expires_at:
             del self._store[key]
             return None
+        # Move to end (most-recently-used) — O(1) on OrderedDict
+        self._store.move_to_end(key)
         return value
 
     def set(self, key: str, value: Any, ttl: float | None = None):
         expires_at = time.monotonic() + (ttl if ttl is not None else self._default_ttl)
+        if key in self._store:
+            self._store.move_to_end(key)
         self._store[key] = (value, expires_at)
+        # Evict LRU entries when over capacity
+        while len(self._store) > self._max_size:
+            self._store.popitem(last=False)
 
     def invalidate(self, key: str):
         self._store.pop(key, None)
@@ -41,9 +59,14 @@ class TTLCache:
     def clear(self):
         self._store.clear()
 
+    @property
+    def stats(self) -> dict:
+        """Return cache statistics for debugging."""
+        return {"size": len(self._store), "max_size": self._max_size}
 
-# Global cache instance — 30s default TTL
-cache = TTLCache(default_ttl=30.0)
+
+# Global cache instance — 30s default TTL, 512 max keys
+cache = TTLCache(default_ttl=30.0, max_size=512)
 
 
 def cached(key: str, ttl: float | None = None):

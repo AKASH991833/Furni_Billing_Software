@@ -1,22 +1,18 @@
 """Reports service using aggregation queries."""
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import func
+from sqlalchemy.orm import joinedload
 
 from app.database.database import get_session
 from app.models.models import Customer, Invoice, Payment
-from sqlalchemy.orm import joinedload
-
-
-def date_filter_sql(start: date | None, end: date | None):
-    """Return (filter_exprs: list) snippet helpers."""
-    return {"start": start, "end": end}
+from app.utils.cache import cache
 
 
 def _date_range(period: str, start=None, end=None):
-    today = date.today()
+    today = datetime.now(tz=timezone.utc).date()
     if period == "today":
         return today, today
     if period == "week":
@@ -50,6 +46,9 @@ def income_summary(period="today", start=None, end=None) -> dict:
 
 
 def totals_overview() -> dict:
+    cached = cache.get("report_totals")
+    if cached is not None:
+        return cached
     session = get_session()
     try:
         total_income = session.query(func.coalesce(func.sum(Payment.amount), 0)).scalar() or 0
@@ -60,21 +59,27 @@ def totals_overview() -> dict:
         )
         invoice_count = session.query(func.count(Invoice.id)).filter(Invoice.status != "DRAFT").scalar() or 0
         customer_count = session.query(func.count(Customer.id)).scalar() or 0
-        return {
+        result = {
             "total_income": float(total_income or 0),
             "total_outstanding": float(max(total_billed - total_income, 0)),
             "invoice_count": invoice_count,
             "customer_count": customer_count,
             "total_billed": float(total_billed or 0),
         }
+        cache.set("report_totals", result, ttl=30)
+        return result
     finally:
         session.close()
 
 
 def payment_history(limit=200):
+    cache_key = f"payment_history:{limit}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
     session = get_session()
     try:
-        return (
+        result = (
             session.query(Payment)
             .join(Invoice)
             .options(joinedload(Payment.invoice))
@@ -82,6 +87,8 @@ def payment_history(limit=200):
             .limit(limit)
             .all()
         )
+        cache.set(cache_key, result, ttl=30)
+        return result
     finally:
         session.close()
 
@@ -89,7 +96,7 @@ def payment_history(limit=200):
 def monthly_income(months=12) -> list[dict]:
     session = get_session()
     try:
-        today = date.today()
+        today = datetime.now(tz=timezone.utc).date()
         start = (today.replace(day=1) - timedelta(days=365)) if months >= 12 else today.replace(day=1)
         rows = (
             session.query(

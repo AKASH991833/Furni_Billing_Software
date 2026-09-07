@@ -1,7 +1,6 @@
 """Main application window with sidebar navigation and page stack."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
@@ -10,24 +9,26 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.services.business_service import get_profile
-from app.ui.widgets.common import Toast
-from app.ui.widgets.header import Header
-from app.ui.widgets.sidebar import NAV_FORWARD, Sidebar
+from app.services.business_service import on_profile_changed
 from app.ui.pages.customers_page import CustomersPage
 from app.ui.pages.dashboard_page import DashboardPage
 from app.ui.pages.invoices_page import InvoicesPage
 from app.ui.pages.reports_page import ReportsPage
 from app.ui.pages.settings_page import SettingsPage
 from app.ui.style import STYLESHEET
+from app.ui.widgets.common import Toast
+from app.ui.widgets.header import Header
+from app.ui.widgets.sidebar import NAV_FORWARD, Sidebar
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, on_logout=None):
         super().__init__()
         self.setWindowTitle("Furniture Bill - Billing & Accounts")
         self.resize(1280, 800)
         self.setMinimumSize(1024, 700)
+        self._on_logout = on_logout
+
         self.setStyleSheet(STYLESHEET)
 
         root = QWidget()
@@ -43,7 +44,7 @@ class MainWindow(QMainWindow):
         right = QVBoxLayout()
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(0)
-        self.header = Header()
+        self.header = Header(on_logout=self._on_logout, on_navigate=self._header_navigate)
         right.addWidget(self.header)
 
         self.stack = QStackedWidget()
@@ -65,6 +66,28 @@ class MainWindow(QMainWindow):
         self.header.set_title("Home", "Welcome back")
         self._current = "dashboard"
 
+        # Trigger the first show so dashboard data loads immediately on startup
+        self.pages["dashboard"].on_show()
+
+        # React to profile/settings changes in real time so nothing stays stale
+        # until restart — mirrors web auto-reload after a settings save.
+        on_profile_changed(self._on_profile_changed)
+
+
+
+    def _on_profile_changed(self):
+        """Called after every settings save: refresh header + current page."""
+        try:
+            self.header.refresh_business_name()
+        except Exception:  # noqa: BLE001, S110
+            pass
+        try:
+            page = self.pages.get(self._current)
+            if page is not None:
+                page.refresh()
+        except Exception:  # noqa: BLE001, S110
+            pass
+
     def _navigate(self, key: str):
         page = self.pages.get(key)
         if page is None:
@@ -74,6 +97,14 @@ class MainWindow(QMainWindow):
         self._current = key
         title = NAV_FORWARD.get(key, "Home")
         self.header.set_title(title, self._subtitle_for(key))
+
+    def _header_navigate(self, page: str, tab: str | None = None):
+        """Navigate from header dropdown — supports optional tab jump."""
+        self._navigate(page)
+        if tab and page == "settings":
+            settings_page = self.pages.get("settings")
+            if settings_page and hasattr(settings_page, "switch_to_tab"):
+                settings_page.switch_to_tab(tab)
 
     def _subtitle_for(self, key: str) -> str:
         subs = {

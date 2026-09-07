@@ -5,27 +5,30 @@ Table rows open invoices/payments on double-click.
 Quick action buttons for common tasks.
 Auto-refresh keeps data current.
 Overdue alerts shown prominently.
+
+Performance: stat cards are created once and updated in-place on
+refresh, avoiding widget recreation overhead and UI flicker.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QFont
+from PySide6.QtCore import QMargins, Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
-    QHeaderView,
 )
 
 from app.services import dashboard_service
-from app.services.invoice_service import invoice_status, invoice_outstanding
+from app.services.invoice_service import compute_status
 from app.ui.pages.base_page import BasePage
-from app.ui.style import PRIMARY, SUCCESS, WARNING, DANGER, TEXT_MUTED
+from app.ui.style import DANGER, PRIMARY, SUCCESS, WARNING
+from app.ui.widgets.common import _dark_or_light
 
 
 def _money(v) -> str:
@@ -33,30 +36,42 @@ def _money(v) -> str:
 
 
 class ClickableStatCard(QFrame):
-    """Stat card that navigates to a page on click."""
+    """Stat card that navigates to a page on click.
+
+    Created once and updated in-place via ``set_value()`` to avoid
+    widget recreation on every dashboard refresh.
+    """
 
     def __init__(self, title: str, value: str, accent: str = PRIMARY,
-                 navigate_to: str = None, parent=None):
+                 navigate_to: str | None = None, parent=None):
         super().__init__(parent)
-        self.setObjectName("card")
+        self.setObjectName("dashStatCard")
         self._navigate_to = navigate_to
+        self._accent = accent
         self.setCursor(Qt.PointingHandCursor if navigate_to else Qt.ArrowCursor)
         self.setStyleSheet(
-            f"QFrame#card {{ border-left: 4px solid {accent}; background: white;"
-            " border: 1px solid #E5E7EB; border-radius: 12px;"
-            f" border-left: 4px solid {accent}; }}"
-            "QFrame#card:hover { border-color: #2563EB; background: #F8FAFC; }"
+            f"QFrame#dashStatCard {{ border-left: 4px solid {accent};"
+            f" background: {_dark_or_light('qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(31,41,55,0.92),stop:1 rgba(28,38,51,0.88))', 'qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,0.92),stop:1 rgba(248,250,254,0.88))')};"
+            f" border: 1px solid {_dark_or_light('rgba(55,65,81,0.5)','rgba(200,210,230,0.5)')};"
+            f" border-radius: 14px; border-left: 4px solid {accent}; }}"
+            f"QFrame#dashStatCard:hover {{ border-color: rgba(37, 99, 235, 0.3);"
+            f" background: {_dark_or_light('qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(30,41,59,0.95),stop:1 rgba(30,41,55,0.9))','qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 rgba(255,255,255,0.96),stop:1 rgba(240,244,252,0.92))')}; }}"
         )
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 14, 16, 14)
+        lay.setContentsMargins(18, 16, 18, 16)
         lay.setSpacing(4)
         v = QLabel(value)
-        v.setObjectName("statValue")
+        v.setObjectName("dashStatValue")
         v.setStyleSheet(f"color: {accent};")
         t = QLabel(title)
-        t.setObjectName("statLabel")
+        t.setObjectName("dashStatLabel")
         lay.addWidget(v)
         lay.addWidget(t)
+        self._value_label = v  # direct reference for in-place updates
+
+    def set_value(self, value: str):
+        """Update the displayed value without recreating the widget."""
+        self._value_label.setText(value)
 
     def mousePressEvent(self, ev):
         if ev.button() == Qt.LeftButton and self._navigate_to:
@@ -73,38 +88,40 @@ class ClickableStatCard(QFrame):
 class DashboardPage(BasePage):
     def __init__(self, main_window=None, parent=None):
         super().__init__(main_window, parent)
+        self._stat_cards = {}  # key -> ClickableStatCard for in-place updates
         self._build()
 
     def _build(self):
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(24, 20, 24, 20)
-        outer.setSpacing(12)
+        outer.setContentsMargins(28, 22, 28, 22)
+        outer.setSpacing(14)
 
-        # --- Overdue alert banner ---
+        # --- Overdue alert banner (glass danger) ---
         self.alert_frame = QFrame()
-        self.alert_frame.setObjectName("card")
-        self.alert_frame.setStyleSheet(
-            "QFrame#card { background: #FEF2F2; border: 1px solid #FECACA; border-radius: 10px; }"
-        )
+        self.alert_frame.setObjectName("dashAlert")
         alert_lay = QHBoxLayout(self.alert_frame)
-        alert_lay.setContentsMargins(16, 10, 16, 10)
+        alert_lay.setContentsMargins(18, 12, 18, 12)
         self.alert_label = QLabel()
-        self.alert_label.setStyleSheet("color: #991B1B; font-weight: 600; font-size: 13px;")
+        self.alert_label.setObjectName("dashAlertText")
         self.alert_label.setWordWrap(True)
         alert_lay.addWidget(self.alert_label)
         self.alert_frame.setVisible(False)
         outer.addWidget(self.alert_frame)
 
-        # --- Quick action buttons ---
+        # --- Quick action buttons (glass) ---
         actions_row = QHBoxLayout()
-        actions_row.setSpacing(8)
+        actions_row.setSpacing(10)
         btn_new_inv = self._action_btn("+ New Invoice", PRIMARY)
+        btn_new_inv.setObjectName("dashActionPrimary")
         btn_new_inv.clicked.connect(lambda: self._navigate_to("invoices", new_invoice=True))
-        btn_view_inv = self._action_btn("View Invoices", "#6B7280")
+        btn_view_inv = self._action_btn("View Invoices", _dark_or_light("#374151", "#6B7280"))
+        btn_view_inv.setObjectName("dashActionSecondary")
         btn_view_inv.clicked.connect(lambda: self._navigate_to("invoices"))
-        btn_add_cust = self._action_btn("+ Add Customer", "#6B7280")
+        btn_add_cust = self._action_btn("+ Add Customer", _dark_or_light("#374151", "#6B7280"))
+        btn_add_cust.setObjectName("dashActionSecondary")
         btn_add_cust.clicked.connect(lambda: self._navigate_to("customers"))
-        btn_view_reports = self._action_btn("Reports", "#6B7280")
+        btn_view_reports = self._action_btn("Reports", _dark_or_light("#374151", "#6B7280"))
+        btn_view_reports.setObjectName("dashActionSecondary")
         btn_view_reports.clicked.connect(lambda: self._navigate_to("reports"))
         actions_row.addWidget(btn_new_inv)
         actions_row.addWidget(btn_view_inv)
@@ -113,19 +130,21 @@ class DashboardPage(BasePage):
         actions_row.addStretch(1)
         outer.addLayout(actions_row)
 
-        # --- Stats grid ---
+        # --- Stats grid (built once, updated in-place) ---
         self._stats_grid = QGridLayout()
-        self._stats_grid.setSpacing(10)
+        self._stats_grid.setSpacing(12)
         outer.addLayout(self._stats_grid)
+        self._build_stat_cards()
 
-        # --- Bottom row: Recent Invoices + Recent Payments ---
+        # --- Bottom row: Recent Invoices + Recent Payments (glass cards) ---
         bottom = QHBoxLayout()
-        bottom.setSpacing(12)
+        bottom.setSpacing(14)
         outer.addLayout(bottom, 1)
 
         rec_inv_card = self._section_card("Recent Invoices")
         self.recent_invoices_table = self._make_table(
             ["Invoice No", "Customer", "Date", "Status", "Amount"], 5)
+        self.recent_invoices_table.setObjectName("dashTable")
         self.recent_invoices_table.cellDoubleClicked.connect(self._on_invoice_double_click)
         rec_inv_card.layout().addWidget(self.recent_invoices_table)
         bottom.addWidget(rec_inv_card, 3)
@@ -133,21 +152,26 @@ class DashboardPage(BasePage):
         rec_pay_card = self._section_card("Recent Payments")
         self.recent_payments_table = self._make_table(
             ["Date", "Invoice", "Mode", "Amount"], 4)
+        self.recent_payments_table.setObjectName("dashTable")
         rec_pay_card.layout().addWidget(self.recent_payments_table)
         bottom.addWidget(rec_pay_card, 2)
 
-        # --- Monthly income chart ---
+        # --- Monthly income chart (glass card) ---
         chart_card = self._section_card("Monthly Income (last 6 months)")
         try:
-            from PySide6.QtCharts import (  # noqa: F401
-                QBarCategoryAxis, QBarSeries, QBarSet, QChart, QChartView,
+            from PySide6.QtCharts import (
+                QBarCategoryAxis,
+                QBarSeries,
+                QBarSet,
+                QChart,
+                QChartView,
                 QValueAxis,
             )
             from PySide6.QtGui import QColor as _QC
 
             self.chart = QChart()
             self.chart.setBackgroundRoundness(10)
-            self.chart.setMargins(__import__("PySide6.QtCore", fromlist=["QMargins"]).QMargins(0, 0, 0, 0))
+            self.chart.setMargins(QMargins(0, 0, 0, 0))
             self.series = QBarSeries()
             self.chart_series = QBarSet("Income")
             self.chart_series.setColor(_QC("#2563EB"))
@@ -178,35 +202,51 @@ class DashboardPage(BasePage):
         self._refresh_timer.timeout.connect(self._soft_refresh)
         self._refresh_timer.start()
 
+    def _build_stat_cards(self):
+        """Create stat cards once. They are updated in-place on refresh."""
+        card_defs = [
+            ("total_customers", "Total Customers", PRIMARY, "customers"),
+            ("total_invoices", "Total Invoices", PRIMARY, "invoices"),
+            ("today_income", "Today's Income", SUCCESS, None),
+            ("monthly_income", "Monthly Income", SUCCESS, "reports"),
+            ("total_income", "Total Income", SUCCESS, "reports"),
+            ("total_outstanding", "Total Outstanding", WARNING, "invoices"),
+            ("paid_invoices", "Paid Invoices", "#3B82F6", "invoices"),
+            ("pending_invoices", "Pending Invoices", DANGER, "invoices"),
+        ]
+        for i, (key, title, accent, nav) in enumerate(card_defs):
+            row, col = divmod(i, 4)
+            card = ClickableStatCard(title, "—", accent, navigate_to=nav)
+            self._stats_grid.addWidget(card, row, col)
+            self._stat_cards[key] = card
+
     def _action_btn(self, text, color=PRIMARY):
         """Create a quick action button."""
         btn = QPushButton(text)
         btn.setCursor(Qt.PointingHandCursor)
+        # Default style — overridden by setObjectName in _build()
         btn.setStyleSheet(
             f"QPushButton {{ background: {color}; color: white; border: none;"
-            " border-radius: 8px; padding: 8px 16px; font-weight: 600; font-size: 12px; }"
+            " border-radius: 10px; padding: 9px 20px; font-weight: 600; font-size: 12px; }"
             f"QPushButton:hover {{ background: {color}DD; }}"
         )
         return btn
 
     def _section_card(self, title):
-        """Create a styled card section with a title."""
+        """Create a glass card section with a title."""
         c = QFrame()
-        c.setObjectName("card")
-        c.setStyleSheet(
-            "QFrame#card { background: white; border: 1px solid #E5E7EB; border-radius: 12px; }"
-        )
+        c.setObjectName("dashSectionCard")
         v = QVBoxLayout(c)
-        v.setContentsMargins(14, 12, 14, 12)
+        v.setContentsMargins(16, 14, 16, 14)
         v.setSpacing(8)
         t = QLabel(title)
-        t.setObjectName("cardTitle")
-        t.setStyleSheet("font-size: 14px; font-weight: 700; color: #1F2937;")
+        t.setObjectName("dashSectionTitle")
         v.addWidget(t)
         return c
 
     def _make_table(self, headers, hidden_rows=5):
         t = QTableWidget(0, len(headers))
+        t.setObjectName("dashTable")
         t.setHorizontalHeaderLabels(headers)
         t.setEditTriggers(QTableWidget.NoEditTriggers)
         t.setSelectionBehavior(QTableWidget.SelectRows)
@@ -215,15 +255,6 @@ class DashboardPage(BasePage):
         t.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         t.setAlternatingRowColors(True)
         t.setMinimumHeight(200)
-        t.setStyleSheet(
-            "QTableWidget { background: white; alternate-background-color: #F9FAFB;"
-            " border: 1px solid #E5E7EB; border-radius: 8px; }"
-            "QTableWidget::item { padding: 6px 8px; }"
-            "QTableWidget::item:selected { background: #EFF3FA; color: #173560; }"
-            "QTableWidget::item:hover { background: #F3F4F6; }"
-            "QHeaderView::section { background: #F3F4F6; color: #6B7280; font-weight: 600;"
-            " border: none; border-bottom: 1px solid #E5E7EB; padding: 8px; }"
-        )
         return t
 
     def on_first_show(self):
@@ -231,7 +262,7 @@ class DashboardPage(BasePage):
 
     def refresh(self):
         stats = dashboard_service.dashboard_stats()
-        self._render_stats(stats)
+        self._update_stats(stats)
         self._render_alerts(stats)
         self._render_recent_invoices()
         self._render_recent_payments()
@@ -241,12 +272,14 @@ class DashboardPage(BasePage):
         """Refresh data without full rebuild (avoids UI flicker)."""
         try:
             stats = dashboard_service.dashboard_stats()
+            self._update_stats(stats)
             self._render_alerts(stats)
             self._render_recent_invoices()
             self._render_recent_payments()
             self._render_chart()
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
+
 
     def _render_alerts(self, stats):
         """Show overdue invoice alert banner if there are overdue invoices."""
@@ -254,34 +287,28 @@ class DashboardPage(BasePage):
         outstanding = stats.get("total_outstanding", 0)
         if overdue > 0 and outstanding > 0:
             self.alert_label.setText(
-                f"⚠  {overdue} pending invoice(s) with {_money(outstanding)} outstanding. "
+                f"\u26A0  {overdue} pending invoice(s) with {_money(outstanding)} outstanding. "
                 f"Click 'View Invoices' to follow up."
             )
             self.alert_frame.setVisible(True)
         else:
             self.alert_frame.setVisible(False)
 
-    def _render_stats(self, stats):
-        while self._stats_grid.count():
-            item = self._stats_grid.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
-
-        cards = [
-            ("Total Customers", str(stats["total_customers"]), PRIMARY, "customers"),
-            ("Total Invoices", str(stats["total_invoices"]), PRIMARY, "invoices"),
-            ("Today's Income", _money(stats["today_income"]), SUCCESS, None),
-            ("Monthly Income", _money(stats["monthly_income"]), SUCCESS, "reports"),
-            ("Total Income", _money(stats["total_income"]), SUCCESS, "reports"),
-            ("Total Outstanding", _money(stats["total_outstanding"]), WARNING, "invoices"),
-            ("Paid Invoices", str(stats["paid_invoices"]), "#3B82F6", "invoices"),
-            ("Pending Invoices", str(stats["pending_invoices"]), DANGER, "invoices"),
-        ]
-        for i, (title, val, accent, nav) in enumerate(cards):
-            row, col = divmod(i, 4)
-            card_widget = ClickableStatCard(title, val, accent, navigate_to=nav)
-            self._stats_grid.addWidget(card_widget, row, col)
+    def _update_stats(self, stats):
+        """Update stat card values in-place (no widget recreation)."""
+        formatters = {
+            "total_customers": lambda v: str(v),
+            "total_invoices": lambda v: str(v),
+            "today_income": _money,
+            "monthly_income": _money,
+            "total_income": _money,
+            "total_outstanding": _money,
+            "paid_invoices": lambda v: str(v),
+            "pending_invoices": lambda v: str(v),
+        }
+        for key, card in self._stat_cards.items():
+            fmt = formatters.get(key, str)
+            card.set_value(fmt(stats.get(key, 0)))
 
     def _render_recent_invoices(self):
         t = self.recent_invoices_table
@@ -298,29 +325,17 @@ class DashboardPage(BasePage):
         for inv in invoices:
             r = t.rowCount()
             t.insertRow(r)
-            customer = inv.customer.name if inv.customer else "-"
-            total = float(inv.grand_total or 0)
-            paid = sum(float(p.amount or 0) for p in (inv.payments or []))
-            if total == 0:
-                status = "DRAFT" if inv.status == "DRAFT" else "UNPAID"
-            elif paid <= 0:
-                if inv.due_date and inv.due_date < __import__("datetime").date.today():
-                    status = "OVERDUE"
-                else:
-                    status = "UNPAID"
-            elif paid >= total:
-                status = "PAID"
-            else:
-                if inv.due_date and inv.due_date < __import__("datetime").date.today():
-                    status = "OVERDUE"
-                else:
-                    status = "PARTIALLY PAID"
-            vals = [inv.invoice_number, customer,
-                    inv.invoice_date.strftime("%d-%b-%Y") if inv.invoice_date else "-",
-                    status, _money(inv.grand_total)]
+            customer = inv["customer_name"] or "-"
+            status = compute_status(
+                inv["grand_total"], inv["paid"],
+                inv["status"], inv["due_date"],
+            )
+            vals = [inv["invoice_number"], customer,
+                    inv["invoice_date"].strftime("%d-%b-%Y") if inv["invoice_date"] else "-",
+                    status, _money(inv["grand_total"])]
             for c, v in enumerate(vals):
                 item = QTableWidgetItem(str(v))
-                item.setData(Qt.UserRole, inv.id)
+                item.setData(Qt.UserRole, inv["id"])
                 if c == 3:
                     item.setForeground(
                         Qt.GlobalColor.darkBlue if status == "PAID"
@@ -360,9 +375,9 @@ class DashboardPage(BasePage):
         for p in payments:
             r = t.rowCount()
             t.insertRow(r)
-            inv_no = p.invoice.invoice_number if p.invoice else "-"
-            vals = [p.date.strftime("%d-%b-%Y") if p.date else "-",
-                    inv_no, p.mode, _money(p.amount)]
+            inv_no = p["invoice_number"] or "-"
+            vals = [p["date"].strftime("%d-%b-%Y") if p["date"] else "-",
+                    inv_no, p["mode"], _money(p["amount"])]
             for c, v in enumerate(vals):
                 t.setItem(r, c, QTableWidgetItem(str(v)))
 
@@ -384,7 +399,7 @@ class DashboardPage(BasePage):
             self.axis_x.append([lbl for lbl in labels] or ["-"])
             top = max(max(values, default=0) * 1.1, 10)
             self.axis_y.setRange(0, top)
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
 
     def _navigate_to(self, page_key, new_invoice=False):

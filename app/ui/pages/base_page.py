@@ -12,10 +12,19 @@ class BasePage(QWidget):
 
     def on_show(self):
         """Called each time the page becomes visible.
-        Subclasses can lazy-load only when first shown via self._loaded."""
+
+        Calls ``on_first_show`` once on the first visit (one-time setup), then
+        calls ``refresh`` every subsequent visit so data (profile, lists, etc.)
+        is always up to date — mirroring how web pages reload on navigation.
+        """
         if not self._loaded:
             self.on_first_show()
             self._loaded = True
+        else:
+            try:
+                self.refresh()
+            except Exception:  # noqa: BLE001, S110
+                pass
 
     def on_first_show(self):
         pass

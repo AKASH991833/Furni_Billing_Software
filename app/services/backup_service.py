@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import shutil
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.database import database
@@ -19,7 +19,7 @@ def create_backup(destination: Path | None = None) -> Path:
     if not src.exists():
         raise FileNotFoundError("Database not found yet.")
     if destination is None:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
         destination = backup_dir() / f"furniture_backup_{stamp}.db"
 
     # Use SQLite backup API for a consistent snapshot.
@@ -67,4 +67,6 @@ def restore_backup(source: Path) -> Path:
                 pass
 
     database.init_db()
+    from app.utils.cache import cache
+    cache.clear()
     return target
