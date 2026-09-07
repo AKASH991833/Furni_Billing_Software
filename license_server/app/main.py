@@ -60,6 +60,16 @@ if ADMIN_STATIC_DIR.exists():
     @app.get("/admin", include_in_schema=False)
     def redirect_admin_slash():
         return RedirectResponse(url="/admin/")
+
+    @app.get("/style.css", include_in_schema=False)
+    def serve_root_style_css():
+        from fastapi.responses import FileResponse
+        return FileResponse(str(ADMIN_STATIC_DIR / "style.css"), media_type="text/css")
+
+    @app.get("/app.js", include_in_schema=False)
+    def serve_root_app_js():
+        from fastapi.responses import FileResponse
+        return FileResponse(str(ADMIN_STATIC_DIR / "app.js"), media_type="application/javascript")
         
     app.mount("/admin", StaticFiles(directory=str(ADMIN_STATIC_DIR), html=True), name="admin_ui")
 
