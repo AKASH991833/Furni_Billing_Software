@@ -25,15 +25,15 @@ class Settings(BaseSettings):
     )
 
     # --- Database ---
-    database_url: str = "postgresql+psycopg2://license_user:CHANGE_ME@localhost:5432/license_server"
+    database_url: str = "sqlite:///./license_server.db"
 
     # --- Security ---
     admin_username: str = "admin"
-    admin_password_hash: str = ""          # SHA-256 of the admin password
-    secret_key: str = "CHANGE_ME_RANDOM_64_CHARS"
+    admin_password_hash: str = "240be518fabd2724ddb6f04eeb1da5967448d7e831c08c8fa822809f74c720a9"          # default: admin123
+    secret_key: str = "9f8e7d6c5b4a3120efcdab8967452301fedcba9876543210abcdef0123456789"
 
     # --- Signing keys ---
-    private_signing_key: str = ""          # base64 Ed25519 private key
+    private_signing_key: str = "LsWRDbrl2SkImDvdZyPkKzLJH62FU1lteNUZ6cc5Y6w="          # base64 Ed25519 private key
 
     # --- Rate limiting ---
     rate_limit_activation_per_min: int = 10

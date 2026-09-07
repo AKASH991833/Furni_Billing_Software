@@ -14,11 +14,26 @@ _SessionLocal: sessionmaker | None = None
 
 def _build_engine(database_url: str):
     """Create the engine; in-memory SQLite needs a shared StaticPool."""
-    if database_url in ("sqlite://", "sqlite:///:memory:"):
+    # Fix Render's postgres:// to postgresql://
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
+
+    # Fallback to local SQLite if unconfigured or pointing to localhost default
+    if not database_url or "CHANGE_ME@localhost" in database_url:
+        from pathlib import Path
+        db_file = Path("license_server.db").resolve()
+        database_url = f"sqlite:///{db_file}"
+
+    if database_url.startswith("sqlite"):
+        if database_url in ("sqlite://", "sqlite:///:memory:"):
+            return create_engine(
+                database_url,
+                connect_args={"check_same_thread": False},
+                poolclass=StaticPool,
+            )
         return create_engine(
             database_url,
             connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
         )
     return create_engine(database_url, pool_pre_ping=True)
 
