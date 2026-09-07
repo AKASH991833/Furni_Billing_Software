@@ -11,8 +11,8 @@ PRODUCT_ID = "furniture_bill"
 # App version reported during activation.
 APP_VERSION = "1.0.0"
 
-# Sample license server base URL (HTTPS in production).
-LICENSE_SERVER_URL = "http://localhost:8000"
+# Production license server base URL (HTTPS).
+LICENSE_SERVER_URL = "https://furni-billing-software.onrender.com"
 
 # Trial period in days; 0 disables the trial entirely (users must activate).
 TRIAL_DAYS = 0
