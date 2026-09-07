@@ -97,6 +97,15 @@ class ActivationLog(Base):
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     detail: Mapped[str | None] = mapped_column(String(300), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
-
     license: Mapped[License] = relationship(back_populates="activation_log")
+
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
