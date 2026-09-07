@@ -375,6 +375,12 @@ class InvoiceEditor(QWidget):
         btn_save = self._btn("\u2713  Save", "editorSaveBtn")
         btn_save.clicked.connect(lambda: self._save("SAVED"))
 
+        # Payments / Advance button
+        self.btn_payments = self._btn("\u20B9 Advance / Payments")
+        self.btn_payments.setObjectName("editorPaymentBtn")
+        self.btn_payments.setCursor(Qt.PointingHandCursor)
+        self.btn_payments.clicked.connect(self._open_payments)
+
         # WhatsApp share button (visible only after invoice is saved)
         self.btn_whatsapp = self._btn("\uD83D\uDCAC WhatsApp")
         self.btn_whatsapp.setObjectName("whatsappBtn")
@@ -391,6 +397,8 @@ class InvoiceEditor(QWidget):
         top.addWidget(btn_draft)
         top.addSpacing(6)
         top.addWidget(btn_save)
+        top.addSpacing(8)
+        top.addWidget(self.btn_payments)
         top.addSpacing(8)
         top.addWidget(self.btn_whatsapp)
         top.addSpacing(6)
@@ -1058,6 +1066,61 @@ class InvoiceEditor(QWidget):
         self.l_words.setAlignment(Qt.AlignCenter)
         v.addWidget(self.l_words)
 
+        # Advance & Balance Due status card
+        pay_box = QFrame()
+        pay_box.setObjectName("invoicePaymentBox")
+        pay_box.setStyleSheet(
+            "QFrame#invoicePaymentBox {"
+            "  background: rgba(37, 99, 235, 0.08);"
+            "  border: 1px solid rgba(37, 99, 235, 0.25);"
+            "  border-radius: 10px;"
+            "  padding: 6px 12px;"
+            "  margin-top: 4px;"
+            "}"
+        )
+        pay_lay = QHBoxLayout(pay_box)
+        pay_lay.setContentsMargins(8, 4, 8, 4)
+
+        adv_v = QVBoxLayout()
+        adv_v.setSpacing(1)
+        adv_lbl = QLabel("ADVANCE / PAID")
+        adv_lbl.setStyleSheet("font-size: 11px; font-weight: 700; color: #059669; text-transform: uppercase;")
+        self.l_paid = QLabel("\u20B9 0.00")
+        self.l_paid.setStyleSheet("font-size: 15px; font-weight: 800; color: #059669;")
+        adv_v.addWidget(adv_lbl)
+        adv_v.addWidget(self.l_paid)
+
+        bal_v = QVBoxLayout()
+        bal_v.setSpacing(1)
+        bal_lbl = QLabel("BALANCE DUE")
+        bal_lbl.setStyleSheet("font-size: 11px; font-weight: 700; color: #DC2626; text-transform: uppercase;")
+        self.l_balance = QLabel("\u20B9 0.00")
+        self.l_balance.setStyleSheet("font-size: 15px; font-weight: 800; color: #DC2626;")
+        bal_v.addWidget(bal_lbl)
+        bal_v.addWidget(self.l_balance)
+
+        self.btn_record_advance = QPushButton("+ Add Advance")
+        self.btn_record_advance.setCursor(Qt.PointingHandCursor)
+        self.btn_record_advance.setStyleSheet(
+            "QPushButton {"
+            "  background: #2563EB;"
+            "  color: white;"
+            "  font-weight: 700;"
+            "  font-size: 12px;"
+            "  border-radius: 6px;"
+            "  padding: 6px 12px;"
+            "}"
+            "QPushButton:hover { background: #1D4ED8; }"
+        )
+        self.btn_record_advance.clicked.connect(self._open_payments)
+
+        pay_lay.addLayout(adv_v, 1)
+        pay_lay.addSpacing(14)
+        pay_lay.addLayout(bal_v, 1)
+        pay_lay.addSpacing(14)
+        pay_lay.addWidget(self.btn_record_advance, 0, Qt.AlignVCenter)
+        v.addWidget(pay_box)
+
         v.addSpacing(2)
         v.addWidget(self._divider())
         v.addSpacing(2)
@@ -1314,6 +1377,26 @@ class InvoiceEditor(QWidget):
             dlg._print()
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(self, "Print failed", str(e))
+
+    def _open_payments(self):
+        """Open payment dialog to record advance or partial payments."""
+        if not self.invoice or not getattr(self.invoice, "id", None):
+            reply = QMessageBox.question(
+                self, "Save Invoice First",
+                "Invoice must be saved before recording an advance payment.\n\nSave this invoice now?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            self._save("SAVED")
+
+        if self.invoice and getattr(self.invoice, "id", None):
+            from app.ui.pages.payment_dialog import PaymentDialog
+            dlg = PaymentDialog(self.invoice, self)
+            dlg.exec()
+            self._recalc()
+            if self.on_close_callback:
+                self.on_close_callback(refresh=True)
 
     def _menu_qss(self) -> str:
         """Return a QMenu stylesheet."""
@@ -2822,6 +2905,29 @@ class InvoiceEditor(QWidget):
 
         self.l_grand.setText(_money(totals["grand_total"]))
         self.l_words.setText(calc.amount_in_words(totals["grand_total"]))
+
+        # Update Advance / Paid and Balance Due
+        inv_id = self.get_invoice_id()
+        if inv_id and hasattr(self, 'l_paid'):
+            try:
+                from app.services import payment_service
+                s = payment_service.invoice_payment_summary(inv_id)
+                paid_amt = float(s["paid"] or 0)
+                bal_amt = max(float(totals["grand_total"]) - paid_amt, 0.0)
+                self.l_paid.setText(f"\u20B9 {paid_amt:,.2f}")
+                if bal_amt == 0 and paid_amt > 0:
+                    self.l_balance.setText("\u2705 Fully Settled")
+                    self.l_balance.setStyleSheet("font-size: 14px; font-weight: 800; color: #059669;")
+                else:
+                    self.l_balance.setText(f"\u20B9 {bal_amt:,.2f}")
+                    self.l_balance.setStyleSheet("font-size: 15px; font-weight: 800; color: #DC2626;")
+            except Exception:  # noqa: BLE001
+                pass
+        elif hasattr(self, 'l_paid'):
+            self.l_paid.setText("\u20B9 0.00")
+            self.l_balance.setText(_money(totals["grand_total"]))
+            self.l_balance.setStyleSheet("font-size: 15px; font-weight: 800; color: #DC2626;")
+
         self._update_area_totals(area_totals)
         # Update quick stats bar
         self._update_quick_stats(computed, totals)

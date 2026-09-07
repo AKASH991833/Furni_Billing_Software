@@ -623,11 +623,32 @@ def build_layout(profile, invoice, customer, project, items) -> Layout:
         rows += (f'<div class="trow"><span class="tlbl">GST ({_fmt_raw(invoice.gst_rate)}%)</span>'
                  f'<span class="tval">{_money_inr(invoice.gst_amount, currency)}</span></div>')
 
+    # Payments & Advance summary
+    payments = getattr(invoice, "payments", []) or []
+    total_paid = sum(float(p.amount or 0) for p in payments)
+    balance_due = max(float(invoice.grand_total or 0) - total_paid, 0.0)
+
+    payment_rows = ""
+    if total_paid > 0:
+        payment_rows += (
+            f'<div class="trow" style="margin-top:1.5mm;border-top:0.3mm dashed __BORDER__;padding-top:1.5mm;">'
+            f'<span class="tlbl" style="color:#059669;font-weight:800;">Advance / Paid</span>'
+            f'<span class="tval" style="color:#059669;font-weight:800;">{_money_inr(total_paid, currency)}</span></div>'
+        )
+        bal_col = "#DC2626" if balance_due > 0 else "#059669"
+        bal_txt = _money_inr(balance_due, currency) if balance_due > 0 else "PAID IN FULL"
+        payment_rows += (
+            f'<div class="trow">'
+            f'<span class="tlbl" style="color:{bal_col};font-weight:800;">Balance Due</span>'
+            f'<span class="tval" style="color:{bal_col};font-weight:800;">{bal_txt}</span></div>'
+        )
+
     totals_html = (
         f'<div class="totals" id="BLK-TOT">'
         f'{rows}'
         f'<div class="grand"><span class="glbl">GRAND TOTAL</span>'
         f'<span class="gval">{_money_inr(invoice.grand_total, currency)}</span></div>'
+        f'{payment_rows}'
         f'</div>'
     )
     layout.final.append(("BLK-TOT", totals_html))
