@@ -52,18 +52,37 @@
     return json;
   }
 
-  // ---- Toast Notifications ----
-  function toast(msg, kind) {
-    const el = document.createElement("div");
-    el.className = "toast " + (kind || "ok");
-    const icon = kind === "err" ? "✕" : "✓";
-    el.innerHTML = '<span style="font-size:16px;">' + icon + '</span><span>' + esc(msg) + '</span>';
-    $("#toast-wrap").appendChild(el);
-    setTimeout(() => {
-      el.style.opacity = "0";
-      el.style.transform = "translateX(20px)";
-      setTimeout(() => el.remove(), 200);
-    }, 4000);
+  // ---- Clipboard Helper ----
+  function copyToClipboard(text, msg) {
+    if (!text) return;
+    const successMsg = msg || "Copied to clipboard!";
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(() => {
+        toast(successMsg, "ok");
+      }).catch(() => {
+        fallbackCopy(text, successMsg);
+      });
+    } else {
+      fallbackCopy(text, successMsg);
+    }
+  }
+
+  function fallbackCopy(text, msg) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.left = "-9999px";
+    ta.style.top = "-9999px";
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    try {
+      document.execCommand("copy");
+      toast(msg, "ok");
+    } catch (e) {
+      prompt("Copy to clipboard (Ctrl+C, Enter):", text);
+    }
+    document.body.removeChild(ta);
   }
 
   // ---- View Switching ----
@@ -211,12 +230,41 @@
       return;
     }
     tbody.innerHTML = customers.map(c => {
-      const licCount = licenses.filter(l => l.customer_id === c.id).length;
+      const custLicenses = licenses.filter(l => l.customer_id === c.id);
+      let licCell = '';
+      if (!custLicenses.length) {
+        licCell = '<div class="cust-lic-empty">'
+          + '<span class="muted" style="font-size:12px;">No key issued</span>'
+          + '<button class="btn btn-sm btn-primary" data-cust-act="license" data-id="' + c.id + '" style="margin-left:6px;padding:3px 8px;font-size:11px;">+ Issue Key</button>'
+          + '</div>';
+      } else {
+        licCell = '<div class="cust-lic-list">'
+          + custLicenses.map(lic => {
+            const isBound = Boolean(lic.current_device);
+            return '<div class="cust-lic-item">'
+              + '<div class="key-wrapper" style="padding:2px 7px;">'
+              +   '<span class="key-code" style="font-size:12px;">' + esc(lic.license_key) + '</span>'
+              +   '<button class="btn-copy" data-copy="' + esc(lic.license_key) + '" title="Copy License Key">'
+              +     '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>'
+              +   '</button>'
+              + '</div>'
+              + ' ' + badge(lic.status)
+              + ' ' + (isBound 
+                       ? '<span class="badge" style="background:rgba(59,130,246,0.15);color:#93C5FD;border:1px solid rgba(59,130,246,0.3);font-size:10.5px;" title="' + esc(lic.current_device) + '">Active on PC</span>' 
+                       : '<span class="badge" style="background:rgba(148,163,184,0.1);color:#94A3B8;border:1px solid rgba(148,163,184,0.2);font-size:10.5px;">Ready to Activate</span>')
+              + '</div>';
+          }).join("")
+          + '</div>';
+      }
+
       return '<tr data-cust-id="' + c.id + '">'
-        + '<td><strong style="color:#FFF;font-size:14px;">' + esc(c.name) + '</strong></td>'
+        + '<td>'
+        +   '<div><strong style="color:#FFF;font-size:14px;">' + esc(c.name) + '</strong></div>'
+        +   (c.notes ? '<div class="muted" style="font-size:11.5px;margin-top:2px;">' + esc(c.notes) + '</div>' : '')
+        + '</td>'
         + '<td>' + (c.mobile ? '<span>' + esc(c.mobile) + '</span>' : '<span class="muted">-</span>') + '</td>'
         + '<td>' + (c.email ? '<a href="mailto:' + esc(c.email) + '" style="color:#818CF8;text-decoration:none;">' + esc(c.email) + '</a>' : '<span class="muted">-</span>') + '</td>'
-        + '<td><span class="badge active" style="font-size:11px;">' + licCount + ' License' + (licCount === 1 ? '' : 's') + '</span></td>'
+        + '<td>' + licCell + '</td>'
         + '<td class="muted">' + dateShort(c.created_at) + '</td>'
         + '<td>'
         +   '<div class="row-actions">'
@@ -337,20 +385,20 @@
     showModal('<h2>Edit Customer</h2>'
       + '<p class="sub">Update details for ' + esc(c.name) + '</p>'
       + '<div class="form-group">'
-      +   '<label>Business / Customer Name *</label>'
-      +   '<input id="m-edit-name" value="' + esc(c.name) + '" required autofocus>'
+      +   '<label for="m-edit-name">Business / Customer Name *</label>'
+      +   '<input type="text" id="m-edit-name" value="' + esc(c.name) + '" required autofocus autocomplete="off">'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label>Mobile Phone Number</label>'
-      +   '<input id="m-edit-mobile" value="' + esc(c.mobile || '') + '" placeholder="e.g. 9876543210">'
+      +   '<label for="m-edit-mobile">Mobile Phone Number</label>'
+      +   '<input type="tel" id="m-edit-mobile" value="' + esc(c.mobile || '') + '" placeholder="e.g. 9876543210" autocomplete="off">'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label>Email Address</label>'
-      +   '<input id="m-edit-email" type="email" value="' + esc(c.email || '') + '" placeholder="client@example.com">'
+      +   '<label for="m-edit-email">Email Address</label>'
+      +   '<input type="email" id="m-edit-email" value="' + esc(c.email || '') + '" placeholder="client@example.com" autocomplete="off">'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label>Notes / City / Region</label>'
-      +   '<input id="m-edit-notes" value="' + esc(c.notes || '') + '" placeholder="Optional notes">'
+      +   '<label for="m-edit-notes">Notes / City / Region</label>'
+      +   '<input type="text" id="m-edit-notes" value="' + esc(c.notes || '') + '" placeholder="Optional notes" autocomplete="off">'
       + '</div>'
       + '<div class="modal-actions">'
       +   '<button class="btn btn-ghost" id="m-cancel">Cancel</button>'
@@ -382,16 +430,16 @@
     showModal('<h2>Change Administrator Password</h2>'
       + '<p class="sub">Update your master portal password. This change takes effect immediately.</p>'
       + '<div class="form-group">'
-      +   '<label>Current Password *</label>'
-      +   '<input id="m-pwd-curr" type="password" placeholder="Enter current password" required autofocus>'
+      +   '<label for="m-pwd-curr">Current Password *</label>'
+      +   '<input type="password" id="m-pwd-curr" placeholder="Enter current password" required autofocus autocomplete="current-password">'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label>New Password * (min 6 chars)</label>'
-      +   '<input id="m-pwd-new" type="password" placeholder="Enter new strong password" required>'
+      +   '<label for="m-pwd-new">New Password * (min 6 chars)</label>'
+      +   '<input type="password" id="m-pwd-new" placeholder="Enter new strong password" required autocomplete="new-password">'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label>Confirm New Password *</label>'
-      +   '<input id="m-pwd-confirm" type="password" placeholder="Re-enter new password" required>'
+      +   '<label for="m-pwd-confirm">Confirm New Password *</label>'
+      +   '<input type="password" id="m-pwd-confirm" placeholder="Re-enter new password" required autocomplete="new-password">'
       + '</div>'
       + '<div id="m-pwd-error" style="color:#FB7185;font-size:13px;margin-bottom:12px;font-weight:500;"></div>'
       + '<div class="modal-actions">'
@@ -438,20 +486,20 @@
     showModal('<h2>Add New Customer</h2>'
       + '<p class="sub">Register a new business client to issue software licenses.</p>'
       + '<div class="form-group">'
-      +   '<label>Business / Customer Name *</label>'
-      +   '<input id="m-cust-name" placeholder="e.g. Modern Furniture Mart" required autofocus>'
+      +   '<label for="m-cust-name">Business / Customer Name *</label>'
+      +   '<input type="text" id="m-cust-name" placeholder="e.g. Modern Furniture Mart" required autofocus autocomplete="off">'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label>Mobile Phone Number</label>'
-      +   '<input id="m-cust-mobile" placeholder="e.g. 9876543210">'
+      +   '<label for="m-cust-mobile">Mobile Phone Number</label>'
+      +   '<input type="tel" id="m-cust-mobile" placeholder="e.g. 9876543210" autocomplete="off">'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label>Email Address</label>'
-      +   '<input id="m-cust-email" type="email" placeholder="client@example.com">'
+      +   '<label for="m-cust-email">Email Address</label>'
+      +   '<input type="email" id="m-cust-email" placeholder="client@example.com" autocomplete="off">'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label>Notes / City / Region</label>'
-      +   '<input id="m-cust-notes" placeholder="e.g. Mumbai branch, 2-seat install">'
+      +   '<label for="m-cust-notes">Notes / City / Region</label>'
+      +   '<input type="text" id="m-cust-notes" placeholder="e.g. Mumbai branch, 2-seat install" autocomplete="off">'
       + '</div>'
       + '<div class="modal-actions">'
       +   '<button class="btn btn-ghost" id="m-cancel">Cancel</button>'
@@ -463,15 +511,28 @@
       const name = ($("#m-cust-name").value || "").trim();
       if (!name) { toast("Customer name is required.", "err"); return; }
       try {
-        await api("POST", "/api/v1/admin/customers", {
+        const res = await api("POST", "/api/v1/admin/customers", {
           name: name,
           mobile: $("#m-cust-mobile").value || null,
           email: $("#m-cust-email").value || null,
           notes: $("#m-cust-notes").value || null
         });
-        hideModal();
         toast("Customer '" + name + "' created successfully.", "ok");
         await refreshAll();
+
+        const createdCust = res.customer;
+        // Offer immediate license generation
+        showModal('<h2>🎉 Customer Registered!</h2>'
+          + '<p class="sub"><strong>' + esc(name) + '</strong> has been added successfully.</p>'
+          + '<div style="background:rgba(99,102,241,0.08);border:1px solid rgba(99,102,241,0.25);border-radius:10px;padding:18px;margin:16px 0;text-align:center;">'
+          +   '<p style="margin:0 0 14px;color:#E2E8F0;font-size:14px;">Would you like to generate an official commercial license key for <strong>' + esc(name) + '</strong> right now?</p>'
+          +   '<button class="btn btn-primary" id="m-cust-gen-now" style="font-size:14px;padding:10px 22px;">⚡ Yes, Issue License Key Now</button>'
+          + '</div>'
+          + '<div class="modal-actions">'
+          +   '<button class="btn btn-ghost" id="m-cust-done">Later / Done</button>'
+          + '</div>');
+        $("#m-cust-gen-now").onclick = () => showLicenseModal(createdCust ? createdCust.id : null);
+        $("#m-cust-done").onclick = () => hideModal();
       } catch (e) {
         toast(e.message, "err");
       }
@@ -494,11 +555,11 @@
     showModal('<h2>Generate Commercial License</h2>'
       + '<p class="sub">Issue a cryptographically signed license key for a customer.</p>'
       + '<div class="form-group">'
-      +   '<label>Customer Account *</label>'
+      +   '<label for="m-lic-cust">Customer Account *</label>'
       +   '<select id="m-lic-cust">' + opts + '</select>'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label>Software Product *</label>'
+      +   '<label for="m-lic-prod">Software Product *</label>'
       +   '<select id="m-lic-prod">'
       +     '<option value="furniture_bill">Furniture Billing Desktop (FB-)</option>'
       +     '<option value="ac_service">AC Service & Maintenance (AC-)</option>'
@@ -506,12 +567,12 @@
       +   '</select>'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label>License Validity</label>'
+      +   '<label for="m-lic-type">License Validity</label>'
       +   '<select id="m-lic-type"><option value="LIFETIME">LIFETIME (Permanent / Offline-First)</option></select>'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label>Authorized Device Count (Seats)</label>'
-      +   '<input id="m-lic-limit" type="number" min="1" max="20" value="1">'
+      +   '<label for="m-lic-limit">Authorized Device Count (Seats)</label>'
+      +   '<input type="number" id="m-lic-limit" min="1" max="20" value="1">'
       + '</div>'
       + '<div class="modal-actions">'
       +   '<button class="btn btn-ghost" id="m-cancel">Cancel</button>'
@@ -531,14 +592,68 @@
           license_type: "LIFETIME",
           device_limit: limit
         });
-        hideModal();
-        const key = d.license.license_key;
-        toast("License generated: " + key, "ok");
+        toast("License generated: " + d.license.license_key, "ok");
         await refreshAll();
-        switchTab("licenses");
+        showLicenseSuccessModal(d.license, customerMap[cid]);
       } catch (e) {
         toast(e.message, "err");
       }
+    };
+  }
+
+  // ---- License Generated Success Screen ----
+  function showLicenseSuccessModal(lic, customer) {
+    const custName = customer ? customer.name : "Valued Client";
+    const key = lic.license_key;
+    const prodNames = {
+      "furniture_bill": "Furniture Billing Desktop Application",
+      "ac_service": "AC Service & Maintenance Software",
+      "future_product": "Desktop Application"
+    };
+    const prodName = prodNames[lic.product] || lic.product || "Software";
+    const handoverText = `Hello ${custName},\n\nHere is your official commercial software license key:\n\nSoftware: ${prodName}\nLicense Key: ${key}\nLicense Type: Lifetime Edition\nDevice Seats: ${lic.device_limit || 1} PC\n\nHow to activate on your computer:\n1. Launch ${prodName} on your PC.\n2. Open the Activation screen (or click Help -> Activate License).\n3. Enter the License Key above and click 'Activate License'.\n\nThank you for choosing our software!`;
+
+    showModal('<h2>🎉 Commercial License Key Generated!</h2>'
+      + '<p class="sub">Official cryptographic key issued for <strong>' + esc(custName) + '</strong>.</p>'
+      + '<div class="big-key-display">'
+      +   '<div>'
+      +     '<div style="font-size:11px;text-transform:uppercase;color:#94A3B8;letter-spacing:0.5px;margin-bottom:4px;">Official Commercial License Key</div>'
+      +     '<div class="key-text" id="gen-key-val">' + esc(key) + '</div>'
+      +   '</div>'
+      +   '<button class="btn btn-primary" id="btn-copy-gen" style="min-width:110px;">📋 Copy Key</button>'
+      + '</div>'
+      + '<div class="key-meta-grid">'
+      +   '<div class="meta-item"><span class="meta-label">Customer</span><span class="meta-val">' + esc(custName) + '</span></div>'
+      +   '<div class="meta-item"><span class="meta-label">Product</span><span class="meta-val">' + esc(prodName) + '</span></div>'
+      +   '<div class="meta-item"><span class="meta-label">Validity</span><span class="meta-val">LIFETIME</span></div>'
+      +   '<div class="meta-item"><span class="meta-label">Authorized Devices</span><span class="meta-val">' + (lic.device_limit || 1) + ' PC</span></div>'
+      + '</div>'
+      + '<div class="whatsapp-share-card">'
+      +   '<div style="display:flex;justify-content:space-between;align-items:center;">'
+      +     '<label style="margin:0;">Client Handover Message (WhatsApp / Email Ready):</label>'
+      +     '<button class="btn btn-ghost btn-sm" id="btn-copy-handover" style="padding:2px 8px;font-size:11px;">📋 Copy Message</button>'
+      +   '</div>'
+      +   '<textarea id="m-handover-msg" readonly rows="4">' + esc(handoverText) + '</textarea>'
+      + '</div>'
+      + '<div class="modal-actions" style="justify-content:space-between;">'
+      +   '<button class="btn btn-ghost" id="m-done-close">Done</button>'
+      +   '<button class="btn btn-primary" id="m-view-lic-tab">View in Licenses Tab →</button>'
+      + '</div>');
+
+    $("#btn-copy-gen").onclick = () => {
+      copyToClipboard(key, "License Key copied to clipboard!");
+    };
+    $("#btn-copy-handover").onclick = () => {
+      copyToClipboard(handoverText, "Full client handover message copied!");
+    };
+    $("#m-done-close").onclick = async () => {
+      hideModal();
+      await refreshAll();
+    };
+    $("#m-view-lic-tab").onclick = async () => {
+      hideModal();
+      await refreshAll();
+      switchTab("licenses");
     };
   }
 
@@ -598,11 +713,7 @@
       const copyBtn = e.target.closest(".btn-copy");
       if (copyBtn) {
         const key = copyBtn.dataset.copy;
-        if (key && navigator.clipboard) {
-          navigator.clipboard.writeText(key).then(() => {
-            toast("Copied license key: " + key, "ok");
-          });
-        }
+        copyToClipboard(key, "Copied license key: " + key);
         return;
       }
       // Check Row Action Button
@@ -612,6 +723,13 @@
 
     // Customer Rows Actions
     $("#customer-rows").addEventListener("click", (e) => {
+      // Check Copy Button inside Customer Table
+      const copyBtn = e.target.closest(".btn-copy");
+      if (copyBtn) {
+        const key = copyBtn.dataset.copy;
+        copyToClipboard(key, "Copied license key: " + key);
+        return;
+      }
       const btn = e.target.closest("[data-cust-act]");
       if (btn) custAction(btn.dataset.custAct, parseInt(btn.dataset.id));
     });
