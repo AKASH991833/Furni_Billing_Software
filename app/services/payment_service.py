@@ -7,6 +7,7 @@ from sqlalchemy import func
 
 from app.database.database import get_session
 from app.models.models import Invoice, Payment
+from app.utils.cache import cache
 
 
 def add_payment(invoice_id: int, amount, date_value=None, mode="Cash",
@@ -24,6 +25,9 @@ def add_payment(invoice_id: int, amount, date_value=None, mode="Cash",
         session.add(p)
         session.commit()
         session.refresh(p)
+        cache.invalidate("dashboard_stats")
+        cache.invalidate_prefix("recent_")
+        cache.invalidate_prefix("monthly_")
         return p
     finally:
         session.close()

@@ -8,6 +8,7 @@ from sqlalchemy import or_
 from app.database.database import get_session
 from app.models.models import Customer, Invoice, InvoiceItem, Setting, Payment
 from app.utils.calculations import amount_in_words, compute_full_invoice
+from app.utils.cache import cache
 from sqlalchemy.orm import joinedload, selectinload
 
 
@@ -34,7 +35,19 @@ def invoice_status(invoice) -> str:
     return "PARTIALLY PAID"
 
 
+def peek_next_invoice_number(prefix: str) -> str:
+    """Return what the next invoice number WOULD be, without incrementing."""
+    session = get_session()
+    try:
+        row = session.query(Setting).filter_by(key="invoice_seq").first()
+        seq = int(row.value) if row and row.value else 0
+        return f"{prefix}-{(seq + 1):04d}"
+    finally:
+        session.close()
+
+
 def next_invoice_number(prefix: str, session=None) -> str:
+    """Increment the counter and return the new invoice number."""
     own = session is None
     s = session if session else get_session()
     try:
@@ -121,6 +134,9 @@ def create_invoice(data: dict, items: list[dict]) -> Invoice:
                 sort_order=i,
             ))
         session.commit()
+        cache.invalidate("dashboard_stats")
+        cache.invalidate_prefix("recent_")
+        cache.invalidate_prefix("monthly_")
         return (
             session.query(Invoice)
             .options(
@@ -184,6 +200,9 @@ def update_invoice(invoice_id: int, data: dict, items: list[dict]) -> Invoice:
             ))
 
         session.commit()
+        cache.invalidate("dashboard_stats")
+        cache.invalidate_prefix("recent_")
+        cache.invalidate_prefix("monthly_")
         # Expire the items collection so the identity map reloads fresh state,
         # otherwise the returned object would carry the pre-edit stale items.
         session.expire(inv, ["items"])
@@ -261,6 +280,8 @@ def delete_invoice(invoice_id: int) -> bool:
         if inv:
             session.delete(inv)
             session.commit()
+            cache.invalidate("dashboard_stats")
+            cache.invalidate_prefix("recent_")
             return True
         return False
     finally:

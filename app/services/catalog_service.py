@@ -1,17 +1,26 @@
-"""Area and item suggestion services."""
+"""Area and item suggestion services.
+
+Frequently accessed data (areas, items) is cached for speed.
+"""
 from __future__ import annotations
 
 from sqlalchemy import func
 
 from app.database.database import get_session
 from app.models.models import Area, Item
+from app.utils.cache import cache
 
 
 def list_areas(include_other: bool = True) -> list[Area]:
+    cached_areas = cache.get("areas_list")
+    if cached_areas is not None:
+        return cached_areas
     session = get_session()
     try:
         q = session.query(Area).order_by(Area.sort_order, Area.name)
-        return q.all()
+        result = q.all()
+        cache.set("areas_list", result, ttl=60)
+        return result
     finally:
         session.close()
 
@@ -23,6 +32,7 @@ def add_area(name: str) -> Area:
         session.add(area)
         session.commit()
         session.refresh(area)
+        cache.invalidate("areas_list")
         return area
     finally:
         session.close()
@@ -35,6 +45,7 @@ def delete_area(name: str) -> bool:
         if area and not area.is_system:
             session.delete(area)
             session.commit()
+            cache.invalidate("areas_list")
             return True
         return False
     finally:
@@ -98,6 +109,7 @@ def delete_item(item_id: int) -> bool:
         if it is not None:
             session.delete(it)
             session.commit()
+            cache.invalidate_prefix("suggest_items")
             return True
         return False
     finally:
@@ -145,6 +157,7 @@ def add_custom_item(name: str, area: str) -> Item:
         session.add(item)
         session.commit()
         session.refresh(item)
+        cache.invalidate_prefix("suggest_items")
         return item
     finally:
         session.close()

@@ -56,7 +56,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.services import business_service, catalog_service, customer_service, invoice_service
-from app.services.invoice_service import next_invoice_number
+from app.services.invoice_service import next_invoice_number, peek_next_invoice_number
 from app.ui.widgets.common import show_toast
 from app.utils import calculations as calc
 
@@ -238,8 +238,15 @@ class InvoiceEditor(QWidget):
         self._autosave_timer.start()
 
     def _autosave(self):
-        """Save as draft if there are unsaved changes and a customer is selected."""
+        """Auto-save draft only for already-saved invoices (not brand new ones).
+
+        This prevents creating unwanted draft invoices when the user just
+        opened the editor but never clicked Save.
+        """
         if not self._dirty:
+            return
+        # Only auto-save if this invoice was already saved at least once
+        if not self.invoice:
             return
         cid = self.f_customer.currentData()
         if not cid:
@@ -863,7 +870,7 @@ class InvoiceEditor(QWidget):
             self.f_gst.setValue(float(profile.default_gst_rate or 0)
                                 if (profile and profile.show_gst) else 0)
             prefix = business_service.get_invoice_prefix()
-            self.f_invoice_no.setText(next_invoice_number(prefix))
+            self.f_invoice_no.setText(peek_next_invoice_number(prefix))
             if customer_id:
                 idx = self.f_customer.findData(customer_id)
                 self.f_customer.setCurrentIndex(idx if idx >= 0 else 0)
