@@ -1,73 +1,275 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Furniture Bill &middot; License Admin</title>
-<link rel="stylesheet" href="/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>License Admin Portal &middot; Furniture Bill Suite</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/admin/style.css">
 </head>
 <body>
 <div id="app">
 
-  <!-- ===== Login view ===== -->
+  <!-- ===== Login View ===== -->
   <section id="login-view" class="view">
-    <form class="login-card" id="login-form">
-      <h1>Furniture Bill</h1>
-      <p class="sub">License Server Admin</p>
-      <label>Username<input type="text" id="login-username" autocomplete="username" required></label>
-      <label>Password<input type="password" id="login-password" autocomplete="current-password" required></label>
-      <div class="login-error" id="login-error"></div>
-      <button type="submit" class="btn primary block">Sign In</button>
-    </form>
+    <div class="login-wrapper">
+      <div class="login-glow"></div>
+      <form class="login-card" id="login-form">
+        <div class="brand-badge">
+          <div class="brand-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+          </div>
+          <div>
+            <h1>Furniture Bill</h1>
+            <span class="brand-sub">Commercial Licensing Central</span>
+          </div>
+        </div>
+        
+        <p class="login-hint">Sign in to manage commercial desktop licenses and client devices.</p>
+
+        <div class="form-group">
+          <label for="login-username">Administrator Username</label>
+          <div class="input-with-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+              <circle cx="12" cy="7" r="4"></circle>
+            </svg>
+            <input type="text" id="login-username" placeholder="admin" autocomplete="username" required autofocus>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="login-password">Password</label>
+          <div class="input-with-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+            </svg>
+            <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" required>
+          </div>
+        </div>
+
+        <div class="login-error" id="login-error"></div>
+
+        <button type="submit" class="btn btn-primary btn-block">
+          <span>Sign In to Dashboard</span>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+            <polyline points="12 5 19 12 12 19"></polyline>
+          </svg>
+        </button>
+      </form>
+    </div>
   </section>
 
-  <!-- ===== Dashboard view ===== -->
+  <!-- ===== Dashboard View ===== -->
   <section id="dashboard-view" class="view hidden">
+    
+    <!-- Top Navigation Bar -->
     <header class="topbar">
-      <h1>Furniture Bill &middot; License Admin</h1>
-      <button class="btn ghost" id="logout-btn">Sign out</button>
+      <div class="topbar-brand">
+        <div class="brand-icon small">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"></path>
+            <path d="M2 17l10 5 10-5"></path>
+            <path d="M2 12l10 5 10-5"></path>
+          </svg>
+        </div>
+        <div>
+          <h2>Furniture Bill <span class="badge-tag">License Hub</span></h2>
+          <div class="system-status">
+            <span class="status-pulse"></span>
+            <span>Live Server Active &middot; Ed25519 Verified</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <span class="user-pill">
+          <span class="avatar">A</span>
+          <span id="admin-display-name">Administrator</span>
+        </span>
+        <button class="btn btn-ghost" id="logout-btn" title="Sign Out">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+            <polyline points="16 17 21 12 16 7"></polyline>
+            <line x1="21" y1="12" x2="9" y2="12"></line>
+          </svg>
+          <span>Sign out</span>
+        </button>
+      </div>
     </header>
 
+    <!-- Metrics Cards Row -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-icon icon-purple">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="7" width="20" height="14" rx="2" ry="2"></rect>
+            <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path>
+          </svg>
+        </div>
+        <div>
+          <div class="stat-label">Total Licenses</div>
+          <div class="stat-value" id="stat-total-licenses">0</div>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon icon-green">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+            <polyline points="22 4 12 14.01 9 11.01"></polyline>
+          </svg>
+        </div>
+        <div>
+          <div class="stat-label">Active Licenses</div>
+          <div class="stat-value" id="stat-active-licenses">0</div>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon icon-blue">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+            <circle cx="9" cy="7" r="4"></circle>
+            <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+            <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+          </svg>
+        </div>
+        <div>
+          <div class="stat-label">Registered Customers</div>
+          <div class="stat-value" id="stat-total-customers">0</div>
+        </div>
+      </div>
+
+      <div class="stat-card">
+        <div class="stat-icon icon-amber">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+            <line x1="8" y1="21" x2="16" y2="21"></line>
+            <line x1="12" y1="17" x2="12" y2="21"></line>
+          </svg>
+        </div>
+        <div>
+          <div class="stat-label">Bound Devices</div>
+          <div class="stat-value" id="stat-bound-devices">0</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Navigation Tabs -->
     <nav class="tabs">
-      <button class="tab active" data-tab="licenses">Licenses</button>
-      <button class="tab" data-tab="customers">Customers</button>
+      <button class="tab active" data-tab="licenses">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+          <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+        </svg>
+        <span>Licenses</span>
+        <span class="tab-count" id="count-licenses">0</span>
+      </button>
+      <button class="tab" data-tab="customers">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+          <circle cx="12" cy="7" r="4"></circle>
+        </svg>
+        <span>Customers</span>
+        <span class="tab-count" id="count-customers">0</span>
+      </button>
     </nav>
 
-    <!-- Licenses -->
+    <!-- Licenses Panel -->
     <div class="panel" id="panel-licenses">
       <div class="toolbar">
-        <input type="search" id="license-search" placeholder="Search key or customer...">
-        <button class="btn primary" id="new-license-btn">+ New License</button>
+        <div class="search-box">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="search" id="license-search" placeholder="Search by key, customer name, or status...">
+        </div>
+        <button class="btn btn-primary" id="new-license-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          <span>Issue New License</span>
+        </button>
       </div>
-      <table class="table">
-        <thead>
-          <tr><th>Key</th><th>Product</th><th>Customer</th><th>Status</th><th>Device</th><th>Activated</th><th>Actions</th></tr>
-        </thead>
-        <tbody id="license-rows"><tr><td colspan="7" class="muted">Loading...</td></tr></tbody>
-      </table>
+
+      <div class="table-container">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>License Key</th>
+              <th>Product</th>
+              <th>Customer</th>
+              <th>Status</th>
+              <th>Bound Device</th>
+              <th>Activated Date</th>
+              <th>Quick Actions</th>
+            </tr>
+          </thead>
+          <tbody id="license-rows">
+            <tr><td colspan="7" class="empty-state">Loading licenses...</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
-    <!-- Customers -->
+    <!-- Customers Panel -->
     <div class="panel hidden" id="panel-customers">
       <div class="toolbar">
-        <input type="search" id="customer-search" placeholder="Search name, mobile or email...">
-        <button class="btn primary" id="new-customer-btn">+ New Customer</button>
+        <div class="search-box">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"></circle>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          </svg>
+          <input type="search" id="customer-search" placeholder="Search by customer name, mobile, or email...">
+        </div>
+        <button class="btn btn-primary" id="new-customer-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          <span>Add New Customer</span>
+        </button>
       </div>
-      <table class="table">
-        <thead>
-          <tr><th>Name</th><th>Mobile</th><th>Email</th><th>Licenses</th><th>Created</th></tr>
-        </thead>
-        <tbody id="customer-rows"><tr><td colspan="5" class="muted">Loading...</td></tr></tbody>
-      </table>
+
+      <div class="table-container">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Customer Name</th>
+              <th>Mobile</th>
+              <th>Email</th>
+              <th>Total Licenses</th>
+              <th>Created Date</th>
+            </tr>
+          </thead>
+          <tbody id="customer-rows">
+            <tr><td colspan="5" class="empty-state">Loading customers...</td></tr>
+          </tbody>
+        </table>
+      </div>
     </div>
+
   </section>
 </div>
 
-<div id="modal-overlay" class="hidden">
+<!-- Modal Dialog Container -->
+<div id="modal-overlay" class="modal-overlay hidden">
   <div class="modal" id="modal-box"></div>
 </div>
 
-<div id="toast-wrap"></div>
-<script src="/app.js"></script>
+<!-- Floating Toast Container -->
+<div id="toast-wrap" class="toast-container"></div>
+
+<script src="/admin/app.js"></script>
 </body>
 </html>

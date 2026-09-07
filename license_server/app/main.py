@@ -51,9 +51,16 @@ app.add_middleware(
 app.include_router(activation_router)
 app.include_router(admin_router)
 
+from fastapi.responses import RedirectResponse
+
 ADMIN_STATIC_DIR = Path(__file__).resolve().parent.parent / "admin_web" / "static"
 if ADMIN_STATIC_DIR.exists():
     from fastapi.staticfiles import StaticFiles
+    
+    @app.get("/admin", include_in_schema=False)
+    def redirect_admin_slash():
+        return RedirectResponse(url="/admin/")
+        
     app.mount("/admin", StaticFiles(directory=str(ADMIN_STATIC_DIR), html=True), name="admin_ui")
 
 
