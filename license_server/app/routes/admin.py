@@ -41,6 +41,7 @@ router = APIRouter(tags=["admin"])
 
 # Simple in-memory admin session tokens (revoked on restart).
 _admin_tokens: set[str] = set()
+_admin_token_users: dict[str, str] = {}
 
 
 class AdminLoginBody(BaseModel):
@@ -48,9 +49,15 @@ class AdminLoginBody(BaseModel):
     password: str
 
 
-def _issue_token() -> str:
+class ChangePasswordBody(BaseModel):
+    current_password: str
+    new_password: str
+
+
+def _issue_token(username: str = "admin") -> str:
     token = secrets.token_urlsafe(32)
     _admin_tokens.add(token)
+    _admin_token_users[token] = username
     return token
 
 
@@ -59,12 +66,11 @@ def _verify_token(token: str) -> bool:
 
 
 def _handle_login(body: AdminLoginBody):
-    settings = get_settings()
-    username_ok = hmac.compare_digest(body.username.strip(), settings.admin_username)
-    password_ok = settings.admin_password_ok(body.password)
-    if not (username_ok and password_ok):
+    from app.services.license_service import verify_admin_credentials
+    u = body.username.strip()
+    if not verify_admin_credentials(u, body.password):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
-    return {"token": _issue_token()}
+    return {"token": _issue_token(u), "username": u}
 
 
 @router.post("/admin/login")
@@ -85,6 +91,15 @@ def require_admin(authorization: str | None = Header(default=None)):
     token = authorization.removeprefix("Bearer ").strip()
     if not _verify_token(token):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authorized")
+
+
+def get_current_admin(authorization: str | None = Header(default=None)) -> str:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authorized")
+    token = authorization.removeprefix("Bearer ").strip()
+    if not _verify_token(token):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Not authorized")
+    return _admin_token_users.get(token, "admin")
 
 
 # --- Customers ---
@@ -242,6 +257,69 @@ def admin_license_events(license_id: int):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "License not found")
     events = get_license_events(license_id)
     return {"events": events}
+
+
+# --- Customer Management (Delete & Update) ---
+
+@router.delete("/api/v1/admin/customers/{customer_id}", dependencies=[Depends(require_admin)])
+def v1_delete_customer(customer_id: int):
+    from app.services.license_service import delete_customer
+    ok = delete_customer(customer_id)
+    if not ok:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Customer not found")
+    return {"success": True, "message": "Customer deleted successfully"}
+
+
+@router.delete("/admin/customers/{customer_id}", dependencies=[Depends(require_admin)])
+def admin_delete_customer(customer_id: int):
+    return v1_delete_customer(customer_id)
+
+
+@router.put("/api/v1/admin/customers/{customer_id}", dependencies=[Depends(require_admin)])
+def v1_update_customer(customer_id: int, body: CustomerCreate):
+    from app.services.license_service import update_customer
+    res = update_customer(customer_id, body.name, body.mobile, body.email, body.notes)
+    if res is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Customer not found")
+    return {"success": True, "customer": res}
+
+
+@router.put("/admin/customers/{customer_id}", dependencies=[Depends(require_admin)])
+def admin_update_customer(customer_id: int, body: CustomerCreate):
+    return v1_update_customer(customer_id, body)
+
+
+# --- License Delete ---
+
+@router.delete("/api/v1/admin/licenses/{license_id}", dependencies=[Depends(require_admin)])
+def v1_delete_license(license_id: int):
+    from app.services.license_service import delete_license
+    ok = delete_license(license_id)
+    if not ok:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "License not found")
+    return {"success": True, "message": "License deleted successfully"}
+
+
+@router.delete("/admin/licenses/{license_id}", dependencies=[Depends(require_admin)])
+def admin_delete_license(license_id: int):
+    return v1_delete_license(license_id)
+
+
+# --- Admin Password Change ---
+
+@router.post("/api/v1/admin/change-password", dependencies=[Depends(require_admin)])
+def v1_change_password(body: ChangePasswordBody, admin_user: str = Depends(get_current_admin)):
+    from app.services.license_service import change_admin_password
+    ok, msg = change_admin_password(admin_user, body.current_password, body.new_password)
+    if not ok:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, msg)
+    return {"success": True, "message": msg}
+
+
+@router.post("/admin/change-password", dependencies=[Depends(require_admin)])
+def admin_change_password(body: ChangePasswordBody, admin_user: str = Depends(get_current_admin)):
+    return v1_change_password(body, admin_user)
+
 
 
 @router.get("/admin/health")

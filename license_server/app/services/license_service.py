@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.crypto.ed25519 import private_key_from_base64, sign_payload
 from app.crypto.license_keys import generate_license_key, is_valid_format
-from app.models import ActivationLog, Customer, License
+from app.models import ActivationLog, AdminUser, Customer, License
 
 logger = logging.getLogger(__name__)
 
@@ -485,6 +485,7 @@ def _license_dict(session, lic: License) -> dict[str, Any]:
 
 
 def _event_dict(e: ActivationLog) -> dict[str, Any]:
+    cat = getattr(e, "created_at", None)
     return {
         "id": e.id,
         "license_id": e.license_id,
@@ -493,5 +494,112 @@ def _event_dict(e: ActivationLog) -> dict[str, Any]:
         "ip_address": e.ip_address,
         "success": e.success,
         "detail": e.detail,
-        "created_at": e.created_at.isoformat() if e.created_at else None,
+        "created_at": cat.isoformat() if cat else None,
     }
+
+
+def delete_customer(customer_id: int) -> bool:
+    """Delete a customer and all their associated licenses and logs."""
+    session = None
+    try:
+        session = _get_session()
+        customer = session.get(Customer, customer_id)
+        if not customer:
+            return False
+        session.delete(customer)
+        session.commit()
+        return True
+    finally:
+        if session is not None:
+            session.close()
+
+
+def update_customer(customer_id: int, name: str, mobile: str | None, email: str | None, notes: str | None) -> dict[str, Any] | None:
+    """Update customer details."""
+    session = None
+    try:
+        session = _get_session()
+        customer = session.get(Customer, customer_id)
+        if not customer:
+            return None
+        customer.name = name.strip()
+        customer.mobile = mobile.strip() if mobile else None
+        customer.email = email.strip() if email else None
+        customer.notes = notes.strip() if notes else None
+        session.commit()
+        session.refresh(customer)
+        return _customer_dict(customer)
+    finally:
+        if session is not None:
+            session.close()
+
+
+def delete_license(license_id: int) -> bool:
+    """Delete a license from the database."""
+    session = None
+    try:
+        session = _get_session()
+        lic = session.get(License, license_id)
+        if not lic:
+            return False
+        session.delete(lic)
+        session.commit()
+        return True
+    finally:
+        if session is not None:
+            session.close()
+
+
+def verify_admin_credentials(username: str, password: str) -> bool:
+    """Verify admin login against the DB AdminUser or fallback to config."""
+    session = None
+    try:
+        session = _get_session()
+        stmt = select(AdminUser).where(AdminUser.username == username.strip())
+        admin_user = session.execute(stmt).scalars().first()
+        hashed = hashlib.sha256(password.encode("utf-8")).hexdigest()
+        if admin_user:
+            return admin_user.password_hash == hashed
+        
+        # Fallback to config settings
+        settings = get_settings()
+        import hmac
+        if hmac.compare_digest(username.strip(), settings.admin_username) and settings.admin_password_ok(password):
+            # Seed the AdminUser into DB automatically
+            try:
+                new_admin = AdminUser(username=username.strip(), password_hash=hashed)
+                session.add(new_admin)
+                session.commit()
+            except Exception:
+                session.rollback()
+            return True
+        return False
+    finally:
+        if session is not None:
+            session.close()
+
+
+def change_admin_password(username: str, current_password: str, new_password: str) -> tuple[bool, str]:
+    """Change admin password and persist to database."""
+    if not new_password or len(new_password) < 6:
+        return False, "New password must be at least 6 characters long."
+    if not verify_admin_credentials(username, current_password):
+        return False, "Current password does not match."
+    
+    session = None
+    try:
+        session = _get_session()
+        stmt = select(AdminUser).where(AdminUser.username == username.strip())
+        admin_user = session.execute(stmt).scalars().first()
+        new_hash = hashlib.sha256(new_password.encode("utf-8")).hexdigest()
+        if admin_user:
+            admin_user.password_hash = new_hash
+            admin_user.updated_at = _now()
+        else:
+            admin_user = AdminUser(username=username.strip(), password_hash=new_hash)
+            session.add(admin_user)
+        session.commit()
+        return True, "Password changed successfully."
+    finally:
+        if session is not None:
+            session.close()

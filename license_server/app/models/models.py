@@ -97,6 +97,7 @@ class ActivationLog(Base):
     ip_address: Mapped[str | None] = mapped_column(String(45), nullable=True)
     success: Mapped[bool] = mapped_column(Boolean, default=True)
     detail: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     license: Mapped[License] = relationship(back_populates="activation_log")
 
 

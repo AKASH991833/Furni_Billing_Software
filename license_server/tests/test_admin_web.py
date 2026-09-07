@@ -62,3 +62,45 @@ def test_admin_login_and_customer_crud():
     lid = r.json()["licenses"][0]["id"]
     r = c.put(f"/admin/licenses/{lid}/status", json={"status": "REVOKED"}, headers=h)
     assert r.status_code == 200 and r.json()["license"]["status"] == "REVOKED"
+
+    # update customer
+    r = c.put(f"/admin/customers/{cid}", json={"name": "Updated User", "mobile": "8888888888", "email": "up@ex.com", "notes": "VIP"}, headers=h)
+    assert r.status_code == 200
+    assert r.json()["customer"]["name"] == "Updated User"
+
+    # delete license
+    r = c.delete(f"/admin/licenses/{lid}", headers=h)
+    assert r.status_code == 200
+    assert r.json()["success"]
+
+    # delete customer
+    r = c.delete(f"/admin/customers/{cid}", headers=h)
+    assert r.status_code == 200
+    assert r.json()["success"]
+
+
+def test_admin_password_change_flow():
+    c = TestClient(app)
+    # 1. Login with initial password
+    r = c.post("/admin/login", json={"username": "admin", "password": "admin123"})
+    assert r.status_code == 200
+    token = r.json()["token"]
+    h = {"Authorization": f"Bearer {token}"}
+
+    # 2. Try changing with wrong current password
+    r = c.post("/admin/change-password", json={"current_password": "wrongpassword", "new_password": "newpassword123"}, headers=h)
+    assert r.status_code == 400
+
+    # 3. Change password successfully
+    r = c.post("/admin/change-password", json={"current_password": "admin123", "new_password": "newpassword123"}, headers=h)
+    assert r.status_code == 200
+    assert r.json()["success"]
+
+    # 4. Try login with old password (must fail)
+    r = c.post("/admin/login", json={"username": "admin", "password": "admin123"})
+    assert r.status_code == 401
+
+    # 5. Login with new password (must succeed)
+    r = c.post("/admin/login", json={"username": "admin", "password": "newpassword123"})
+    assert r.status_code == 200
+    assert "token" in r.json()
