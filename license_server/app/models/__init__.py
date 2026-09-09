@@ -4,7 +4,9 @@ from app.models.models import (
     AdminUser,
     Base,
     Customer,
+    FailedLogin,
     License,
+    Product,
 )
 
-__all__ = ["ActivationLog", "AdminUser", "Base", "Customer", "License"]
+__all__ = ["ActivationLog", "AdminUser", "Base", "Customer", "FailedLogin", "License", "Product"]

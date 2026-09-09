@@ -145,3 +145,44 @@ class ClientDeactivateRequest(BaseModel):
 
 class CustomerSearch(BaseModel):
     query: str = Field(max_length=200)
+
+
+class ProductCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=150)
+    code: str = Field(min_length=2, max_length=50)
+    prefix: str = Field(min_length=2, max_length=10)
+    description: str | None = None
+    default_device_limit: int = Field(default=1, ge=1, le=50)
+
+    @field_validator("code")
+    @classmethod
+    def normalize_code(cls, v: str) -> str:
+        return v.strip().lower().replace("-", "_").replace(" ", "_")
+
+    @field_validator("prefix")
+    @classmethod
+    def normalize_prefix(cls, v: str) -> str:
+        return "".join(c for c in v.strip().upper() if c.isalnum())
+
+
+class ProductUpdate(BaseModel):
+    name: str | None = Field(default=None, max_length=150)
+    prefix: str | None = Field(default=None, max_length=10)
+    description: str | None = None
+    is_active: bool | None = None
+    default_device_limit: int | None = Field(default=None, ge=1, le=50)
+
+
+class ProductOut(BaseModel):
+    id: int
+    name: str
+    code: str
+    prefix: str
+    description: str | None = None
+    is_active: bool = True
+    default_device_limit: int = 1
+    total_licenses: int = 0
+    active_devices: int = 0
+    created_at: datetime | None = None
+
+    model_config = {"from_attributes": True}

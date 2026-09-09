@@ -138,15 +138,19 @@
     $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === name));
     $("#panel-licenses").classList.toggle("hidden", name !== "licenses");
     $("#panel-customers").classList.toggle("hidden", name !== "customers");
+    const pPanel = $("#panel-products");
+    if (pPanel) pPanel.classList.toggle("hidden", name !== "products");
   }
 
   // ---- State & Data ----
   let licenses = [];
   let customers = [];
   let customerMap = {};
+  let products = [];
+  let productMap = {};
 
   async function refreshAll() {
-    await Promise.all([loadLicenses(), loadCustomers()]);
+    await Promise.all([loadLicenses(), loadCustomers(), loadProducts()]);
     updateStats();
   }
 
@@ -158,8 +162,28 @@
     const boundCount = licenses.filter(l => Boolean(l.current_device)).length;
     $("#stat-bound-devices").textContent = boundCount;
 
+    const activeProds = products.filter(p => p.is_active).length;
+    const statProds = $("#stat-total-products");
+    if (statProds) statProds.textContent = activeProds;
+
     $("#count-licenses").textContent = licenses.length;
     $("#count-customers").textContent = customers.length;
+    const countProds = $("#count-products");
+    if (countProds) countProds.textContent = products.length;
+  }
+
+  async function loadProducts() {
+    try {
+      const q = ($("#product-search") || {}).value || "";
+      const d = await api("GET", "/api/v1/admin/products?search=" + encodeURIComponent(q));
+      products = d.products || [];
+      productMap = {};
+      products.forEach(p => productMap[p.code] = p);
+      renderProducts();
+      updateStats();
+    } catch (e) {
+      toast(e.message, "err");
+    }
   }
 
   async function loadLicenses() {
@@ -214,7 +238,8 @@
     }
     tbody.innerHTML = licenses.map(lic => {
       const cust = lic.customer_name || customerMap[lic.customer_id]?.name || "Unassigned";
-      const prodLabel = (lic.product === "ac_service" ? "AC Service (AC)" : (lic.product === "future_product" ? "Future Product (FP)" : "Furniture Bill (FB)"));
+      const prodObj = productMap[lic.product];
+      const prodLabel = prodObj ? `${prodObj.name} (${prodObj.prefix}-)` : (lic.product === "ac_service" ? "AC Service (AC)" : (lic.product === "future_product" ? "Future Product (FP)" : "Furniture Bill (FB)"));
       const isDeviceBound = Boolean(lic.current_device);
       const devDisplay = isDeviceBound ? (lic.device_label || esc(lic.current_device.slice(0, 14)) + "&hellip;") : '<span class="muted">Unbound (0/' + (lic.device_limit || 1) + ')</span>';
 
@@ -299,6 +324,134 @@
         + '</td>'
         + '</tr>';
     }).join("");
+  }
+
+  
+  function renderProducts() {
+    const tbody = $("#product-rows");
+    if (!tbody) return;
+    if (!products.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No software products found. Click "+ Add New Software Product" to register one.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = products.map(p => {
+      const statusBadge = p.is_active 
+        ? '<span class="badge active">Active</span>' 
+        : '<span class="badge blocked">Disabled</span>';
+
+      return '<tr data-prod-id="' + p.id + '">'
+        + '<td>'
+        +   '<div><strong style="color:#FFF;font-size:14px;">' + esc(p.name) + '</strong></div>'
+        +   (p.description ? '<div class="muted" style="font-size:11.5px;margin-top:2px;">' + esc(p.description) + '</div>' : '')
+        + '</td>'
+        + '<td><span class="badge" style="background:rgba(99,102,241,0.18);color:#A5B4FC;font-family:monospace;font-weight:700;font-size:12px;letter-spacing:0.5px;">' + esc(p.prefix) + '-</span></td>'
+        + '<td><code style="color:#CBD5E1;font-size:11.5px;">' + esc(p.code) + '</code></td>'
+        + '<td>' + statusBadge + '</td>'
+        + '<td><strong style="color:#FFF;">' + (p.total_licenses || 0) + '</strong></td>'
+        + '<td><span style="color:#10B981;font-weight:600;">' + (p.active_devices || 0) + ' PC</span></td>'
+        + '<td>'
+        +   '<div class="row-actions">'
+        +     '<button class="btn btn-sm btn-primary" data-prod-act="issue" data-code="' + esc(p.code) + '"' + (!p.is_active ? ' disabled' : '') + '>+ Issue Key</button>'
+        +     '<button class="btn btn-action" data-prod-act="toggle" data-id="' + p.id + '" data-active="' + (p.is_active ? '1' : '0') + '">' + (p.is_active ? 'Disable' : 'Enable') + '</button>'
+        +   '</div>'
+        + '</td>'
+        + '</tr>';
+    }).join("");
+  }
+
+  async function prodAction(act, code, id, active) {
+    if (act === "issue") {
+      showLicenseModal(null, code);
+      return;
+    }
+    if (act === "toggle") {
+      const willEnable = active !== "1";
+      try {
+        await api("PUT", "/api/v1/admin/products/" + id, { is_active: willEnable });
+        toast(willEnable ? "Product enabled." : "Product disabled.", "ok");
+        await refreshAll();
+      } catch (e) {
+        toast(e.message, "err");
+      }
+    }
+  }
+
+  function showProductModal() {
+    showModal('<h2>Add New Software Product</h2>'
+      + '<p class="sub">Register a new desktop software product to issue commercial licenses.</p>'
+      + '<div class="form-group">'
+      +   '<label for="m-prod-name">Software / App Name *</label>'
+      +   '<input type="text" id="m-prod-name" placeholder="e.g. AC Service & HVAC Billing Suite" required autofocus autocomplete="off">'
+      + '</div>'
+      + '<div class="form-group">'
+      +   '<label for="m-prod-prefix">License Key Prefix * (2-6 letters, e.g. AC, FB, GARAGE)</label>'
+      +   '<input type="text" id="m-prod-prefix" placeholder="e.g. AC" maxlength="6" style="text-transform:uppercase;font-family:monospace;font-weight:700;" required autocomplete="off">'
+      + '</div>'
+      + '<div class="form-group">'
+      +   '<label for="m-prod-code">System Identifier Code *</label>'
+      +   '<input type="text" id="m-prod-code" placeholder="e.g. ac_service" required autocomplete="off">'
+      + '</div>'
+      + '<div class="form-group">'
+      +   '<label for="m-prod-seats">Default Device Seats</label>'
+      +   '<input type="number" id="m-prod-seats" min="1" max="50" value="1">'
+      + '</div>'
+      + '<div class="form-group">'
+      +   '<label for="m-prod-desc">Description / Edition Notes</label>'
+      +   '<input type="text" id="m-prod-desc" placeholder="e.g. Commercial Edition for HVAC Technicians" autocomplete="off">'
+      + '</div>'
+      + '<div class="modal-actions">'
+      +   '<button class="btn btn-ghost" id="m-cancel">Cancel</button>'
+      +   '<button class="btn btn-primary" id="m-save-prod">Register Software</button>'
+      + '</div>');
+
+    const nameInput = $("#m-prod-name");
+    const codeInput = $("#m-prod-code");
+    const prefixInput = $("#m-prod-prefix");
+
+    nameInput.addEventListener("input", () => {
+      const val = nameInput.value.trim();
+      if (!codeInput.dataset.touched) {
+        codeInput.value = val.toLowerCase().replace(/[^a-z0-9]/g, "_").replace(/_+/g, "_").slice(0, 30);
+      }
+      if (!prefixInput.dataset.touched && val) {
+        const words = val.split(/\s+/).filter(Boolean);
+        const pfx = words.length >= 2 ? (words[0][0] + words[1][0]).toUpperCase() : val.slice(0, 2).toUpperCase();
+        prefixInput.value = pfx;
+      }
+    });
+
+    codeInput.addEventListener("input", () => codeInput.dataset.touched = "true");
+    prefixInput.addEventListener("input", () => prefixInput.dataset.touched = "true");
+
+    $("#m-cancel").onclick = hideModal;
+    $("#m-save-prod").onclick = async () => {
+      const name = nameInput.value.trim();
+      const code = codeInput.value.trim();
+      const prefix = prefixInput.value.trim().toUpperCase();
+      const seats = parseInt($("#m-prod-seats").value) || 1;
+      const desc = $("#m-prod-desc").value.trim();
+
+      if (!name || !code || !prefix) {
+        toast("Please fill in software name, key prefix, and code.", "err");
+        return;
+      }
+
+      try {
+        await api("POST", "/api/v1/admin/products", {
+          name: name,
+          code: code,
+          prefix: prefix,
+          default_device_limit: seats,
+          description: desc || null
+        });
+        hideModal();
+        toast("Software '" + name + "' registered successfully!", "ok");
+        await refreshAll();
+        switchTab("products");
+      } catch (e) {
+        toast(e.message, "err");
+      }
+    };
   }
 
   // ---- License Actions ----
@@ -564,16 +717,28 @@
   }
 
   // ---- License Creation Modal ----
-  async function showLicenseModal(preselectedCustomerId = null) {
-    await loadCustomers();
+  async function showLicenseModal(preselectedCustomerId = null, preselectedProductCode = null) {
+    await Promise.all([loadCustomers(), loadProducts()]);
     if (!customers.length) {
       toast("Please create a customer first before generating a license.", "err");
       showCustomerModal();
       return;
     }
-    const opts = customers.map(c => {
+    const activeProducts = products.filter(p => p.is_active);
+    if (!activeProducts.length) {
+      toast("No active software product found. Please add a product first.", "err");
+      showProductModal();
+      return;
+    }
+
+    const custOpts = customers.map(c => {
       const selected = (preselectedCustomerId && c.id === preselectedCustomerId) ? ' selected' : '';
       return '<option value="' + c.id + '"' + selected + '>' + esc(c.name) + '</option>';
+    }).join("");
+
+    const prodOpts = activeProducts.map(p => {
+      const selected = (preselectedProductCode && p.code === preselectedProductCode) ? ' selected' : '';
+      return '<option value="' + esc(p.code) + '"' + selected + '>' + esc(p.name) + ' (' + esc(p.prefix) + '-)' + '</option>';
     }).join("");
 
     showModal('<h2>Generate Commercial License</h2>'
@@ -583,15 +748,14 @@
       +     '<label for="m-lic-cust" style="margin:0;">Customer Account *</label>'
       +     '<a href="javascript:void(0)" id="m-quick-add-cust" style="font-size:12px;color:#818CF8;text-decoration:none;font-weight:600;">+ Add New Customer</a>'
       +   '</div>'
-      +   '<select id="m-lic-cust">' + opts + '</select>'
+      +   '<select id="m-lic-cust">' + custOpts + '</select>'
       + '</div>'
       + '<div class="form-group">'
-      +   '<label for="m-lic-prod">Software Product *</label>'
-      +   '<select id="m-lic-prod">'
-      +     '<option value="furniture_bill">Furniture Billing Desktop (FB-)</option>'
-      +     '<option value="ac_service">AC Service & Maintenance (AC-)</option>'
-      +     '<option value="future_product">Future Desktop Application (FP-)</option>'
-      +   '</select>'
+      +   '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
+      +     '<label for="m-lic-prod" style="margin:0;">Software Product *</label>'
+      +     '<a href="javascript:void(0)" id="m-quick-add-prod" style="font-size:12px;color:#818CF8;text-decoration:none;font-weight:600;">+ Add New Software</a>'
+      +   '</div>'
+      +   '<select id="m-lic-prod">' + prodOpts + '</select>'
       + '</div>'
       + '<div class="form-group">'
       +   '<label for="m-lic-type">License Validity</label>'
@@ -599,7 +763,7 @@
       + '</div>'
       + '<div class="form-group">'
       +   '<label for="m-lic-limit">Authorized Device Count (Seats)</label>'
-      +   '<input type="number" id="m-lic-limit" min="1" max="20" value="1">'
+      +   '<input type="number" id="m-lic-limit" min="1" max="50" value="1">'
       + '</div>'
       + '<div class="modal-actions">'
       +   '<button class="btn btn-ghost" id="m-cancel">Cancel</button>'
@@ -607,12 +771,14 @@
       + '</div>');
 
     $("#m-quick-add-cust").onclick = () => showCustomerModal();
+    $("#m-quick-add-prod").onclick = () => showProductModal();
     $("#m-cancel").onclick = hideModal;
     $("#m-save-lic").onclick = async () => {
       const cid = parseInt($("#m-lic-cust").value);
-      const product = $("#m-lic-prod").value || "furniture_bill";
+      const product = $("#m-lic-prod").value;
       const limit = parseInt($("#m-lic-limit").value) || 1;
       if (!cid) { toast("Please select a valid customer.", "err"); return; }
+      if (!product) { toast("Please select a software product.", "err"); return; }
       try {
         const d = await api("POST", "/api/v1/admin/licenses", {
           customer_id: cid,
@@ -622,7 +788,7 @@
         });
         toast("License generated: " + d.license.license_key, "ok");
         await refreshAll();
-        showLicenseSuccessModal(d.license, customerMap[cid]);
+        showLicenseSuccessModal(d.license, customerMap[cid], productMap[product]);
       } catch (e) {
         toast(e.message, "err");
       }
@@ -630,15 +796,11 @@
   }
 
   // ---- License Generated Success Screen ----
-  function showLicenseSuccessModal(lic, customer) {
+  function showLicenseSuccessModal(lic, customer, prodObj = null) {
     const custName = customer ? customer.name : "Valued Client";
     const key = lic.license_key;
-    const prodNames = {
-      "furniture_bill": "Furniture Billing Desktop Application",
-      "ac_service": "AC Service & Maintenance Software",
-      "future_product": "Desktop Application"
-    };
-    const prodName = prodNames[lic.product] || lic.product || "Software";
+    const prod = prodObj || productMap[lic.product];
+    const prodName = prod ? prod.name : (lic.product === "ac_service" ? "AC Service & Maintenance Software" : "Furniture Billing Desktop Application");
     const handoverText = `Hello ${custName},\n\nHere is your official commercial software license key:\n\nSoftware: ${prodName}\nLicense Key: ${key}\nLicense Type: Lifetime Edition\nDevice Seats: ${lic.device_limit || 1} PC\n\nHow to activate on your computer:\n1. Launch ${prodName} on your PC.\n2. Open the Activation screen (or click Help -> Activate License).\n3. Enter the License Key above and click 'Activate License'.\n\nThank you for choosing our software!`;
 
     showModal('<h2>🎉 Commercial License Key Generated!</h2>'
@@ -734,6 +896,29 @@
     // New Buttons
     $("#new-customer-btn").addEventListener("click", showCustomerModal);
     $("#new-license-btn").addEventListener("click", () => showLicenseModal());
+    const newProdBtn = $("#new-product-btn");
+    if (newProdBtn) newProdBtn.addEventListener("click", showProductModal);
+
+    // Product search with debounce
+    let prodTimer;
+    const prodSearch = $("#product-search");
+    if (prodSearch) {
+      prodSearch.addEventListener("input", () => {
+        clearTimeout(prodTimer);
+        prodTimer = setTimeout(loadProducts, 300);
+      });
+    }
+
+    // Product rows action delegation
+    const prodRows = $("#product-rows");
+    if (prodRows) {
+      prodRows.addEventListener("click", (e) => {
+        const btn = e.target.closest("[data-prod-act]");
+        if (btn) {
+          prodAction(btn.dataset.prodAct, btn.dataset.code, parseInt(btn.dataset.id), btn.dataset.active);
+        }
+      });
+    }
 
     // License Rows Actions
     $("#license-rows").addEventListener("click", (e) => {

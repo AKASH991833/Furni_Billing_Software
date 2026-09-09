@@ -37,14 +37,14 @@ def get_product_prefix(product: str | None) -> str:
     return cleaned[:4] if len(cleaned) >= 2 else _DEFAULT_PREFIX
 
 
-def generate_license_key(product: str = "furniture_bill") -> str:
+def generate_license_key(product: str = "furniture_bill", prefix: str | None = None) -> str:
     """Generate a random license key string like 'FB-7K92-XP4M-LQ81' or 'AC-7K92-XP4M-LQ81'."""
-    prefix = get_product_prefix(product)
+    pfx = (prefix.strip().upper() if prefix else get_product_prefix(product))
     groups = []
     for _ in range(_N_GROUPS):
         group = "".join(secrets.choice(_ALPHABET) for _ in range(_GROUP_LEN))
         groups.append(group)
-    return f"{prefix}-{'-'.join(groups)}"
+    return f"{pfx}-{'-'.join(groups)}"
 
 
 def is_valid_format(key: str, product: str | None = None) -> bool:

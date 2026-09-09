@@ -441,14 +441,11 @@ textarea:-webkit-autofill {
    -------------------------------------------------------------------------- */
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
   gap: 16px;
   margin-bottom: 24px;
 }
 
-@media (max-width: 900px) {
-  .stats-grid { grid-template-columns: repeat(2, 1fr); }
-}
 @media (max-width: 500px) {
   .stats-grid { grid-template-columns: 1fr; }
 }
@@ -483,6 +480,7 @@ textarea:-webkit-autofill {
 .icon-green { background: var(--emerald-bg); color: #34D399; }
 .icon-blue { background: var(--sky-bg); color: #38BDF8; }
 .icon-amber { background: var(--amber-bg); color: #FBBF24; }
+.icon-rose { background: rgba(244, 63, 94, 0.15); color: #FB7185; }
 
 .stat-label {
   font-size: 12px;

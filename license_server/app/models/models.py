@@ -110,3 +110,26 @@ class AdminUser(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
+
+class Product(Base):
+    """Registered software product in the universal licensing catalog."""
+    __tablename__ = "products"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(10), nullable=False)  # e.g. FB, AC, GB, CR
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    default_device_limit: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class FailedLogin(Base):
+    """Anti-brute force audit: tracks failed authentication attempts by IP."""
+    __tablename__ = "failed_logins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ip_address: Mapped[str] = mapped_column(String(45), nullable=False, index=True)
+    attempted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+

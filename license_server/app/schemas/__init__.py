@@ -14,6 +14,9 @@ from app.schemas.schemas import (
     LicenseOut,
     LicenseStatusResponse,
     LicenseUpdate,
+    ProductCreate,
+    ProductOut,
+    ProductUpdate,
     ValidateRequest,
     ValidateResponse,
 )
@@ -33,6 +36,9 @@ __all__ = [
     "LicenseOut",
     "LicenseStatusResponse",
     "LicenseUpdate",
+    "ProductCreate",
+    "ProductOut",
+    "ProductUpdate",
     "ValidateRequest",
     "ValidateResponse",
 ]

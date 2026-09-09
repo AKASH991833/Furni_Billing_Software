@@ -9,7 +9,7 @@ import hmac
 import logging
 import secrets
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel
 
 from app.core.config import get_settings
@@ -20,26 +20,32 @@ from app.schemas import (
     LicenseCreate,
     LicenseEventOut,
     LicenseUpdate,
+    ProductCreate,
+    ProductOut,
+    ProductUpdate,
 )
 from app.services.license_service import (
     block_license,
     create_customer,
     create_license,
+    create_product,
     deactivate_device,
     get_license,
     get_license_events,
     list_customers,
     list_licenses,
+    list_products,
     reactivate_license,
     reset_device,
     revoke_license,
     update_license_status,
+    update_product,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["admin"])
 
-# Simple in-memory admin session tokens (revoked on restart).
+# Cryptographically strong in-memory admin session tokens (revoked on restart/password change).
 _admin_tokens: set[str] = set()
 _admin_token_users: dict[str, str] = {}
 
@@ -55,7 +61,7 @@ class ChangePasswordBody(BaseModel):
 
 
 def _issue_token(username: str = "admin") -> str:
-    token = secrets.token_urlsafe(32)
+    token = secrets.token_urlsafe(48)
     _admin_tokens.add(token)
     _admin_token_users[token] = username
     return token
@@ -65,24 +71,33 @@ def _verify_token(token: str) -> bool:
     return token in _admin_tokens
 
 
-def _handle_login(body: AdminLoginBody):
+def _get_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _handle_login(body: AdminLoginBody, request: Request):
     from app.services.license_service import verify_admin_credentials
     u = body.username.strip()
-    if not verify_admin_credentials(u, body.password):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid credentials")
+    client_ip = _get_client_ip(request)
+    ok, msg = verify_admin_credentials(u, body.password, client_ip=client_ip)
+    if not ok:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=msg)
     return {"token": _issue_token(u), "username": u}
 
 
 @router.post("/admin/login")
-def admin_login(body: AdminLoginBody):
+def admin_login(body: AdminLoginBody, request: Request):
     """Exchange admin credentials for a session token."""
-    return _handle_login(body)
+    return _handle_login(body, request)
 
 
 @router.post("/api/v1/admin/login")
-def api_v1_admin_login(body: AdminLoginBody):
+def api_v1_admin_login(body: AdminLoginBody, request: Request):
     """Exchange admin credentials for a session token (v1)."""
-    return _handle_login(body)
+    return _handle_login(body, request)
 
 
 def require_admin(authorization: str | None = Header(default=None)):
@@ -313,6 +328,9 @@ def v1_change_password(body: ChangePasswordBody, admin_user: str = Depends(get_c
     ok, msg = change_admin_password(admin_user, body.current_password, body.new_password)
     if not ok:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, msg)
+    # Revoke all existing session tokens on password change for security
+    _admin_tokens.clear()
+    _admin_token_users.clear()
     return {"success": True, "message": msg}
 
 
@@ -320,6 +338,52 @@ def v1_change_password(body: ChangePasswordBody, admin_user: str = Depends(get_c
 def admin_change_password(body: ChangePasswordBody, admin_user: str = Depends(get_current_admin)):
     return v1_change_password(body, admin_user)
 
+
+# --- Products Catalog (Multi-Software Support) ---
+
+@router.get("/api/v1/admin/products", dependencies=[Depends(require_admin)])
+def v1_list_products(search: str = ""):
+    """List all registered software products with aggregate stats."""
+    return {"products": list_products(search=search)}
+
+
+@router.get("/admin/products", dependencies=[Depends(require_admin)])
+def admin_list_products(search: str = ""):
+    return v1_list_products(search=search)
+
+
+@router.post("/api/v1/admin/products", dependencies=[Depends(require_admin)])
+def v1_create_product(body: ProductCreate):
+    """Register a new software product in the catalog."""
+    res = create_product(
+        name=body.name,
+        code=body.code,
+        prefix=body.prefix,
+        description=body.description,
+        default_device_limit=body.default_device_limit,
+    )
+    if not res.get("success"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, res.get("message"))
+    return res
+
+
+@router.post("/admin/products", dependencies=[Depends(require_admin)])
+def admin_create_product(body: ProductCreate):
+    return v1_create_product(body)
+
+
+@router.put("/api/v1/admin/products/{product_id}", dependencies=[Depends(require_admin)])
+def v1_update_product(product_id: int, body: ProductUpdate):
+    """Update or toggle software product status."""
+    res = update_product(product_id, body.model_dump(exclude_unset=True))
+    if res is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Product not found")
+    return {"success": True, "product": res}
+
+
+@router.put("/admin/products/{product_id}", dependencies=[Depends(require_admin)])
+def admin_update_product(product_id: int, body: ProductUpdate):
+    return v1_update_product(product_id, body)
 
 
 @router.get("/admin/health")

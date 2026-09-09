@@ -7,15 +7,16 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.crypto.ed25519 import private_key_from_base64, sign_payload
 from app.crypto.license_keys import generate_license_key, is_valid_format
-from app.models import ActivationLog, AdminUser, Customer, License
+from app.models import ActivationLog, AdminUser, Customer, FailedLogin, License, Product
 
 logger = logging.getLogger(__name__)
 
@@ -271,7 +272,9 @@ def create_license(
             return {"success": False, "message": "Customer not found."}
 
         norm_product = normalize_product(product)
-        key = generate_license_key(product=norm_product)
+        prod_obj = session.execute(select(Product).where(Product.code == norm_product)).scalar_one_or_none()
+        custom_prefix = prod_obj.prefix if prod_obj else None
+        key = generate_license_key(product=norm_product, prefix=custom_prefix)
         key_hash = hash_license_key(key)
 
         license_ = License(
@@ -550,30 +553,43 @@ def delete_license(license_id: int) -> bool:
             session.close()
 
 
-def verify_admin_credentials(username: str, password: str) -> bool:
-    """Verify admin login against the DB AdminUser or fallback to config."""
+def verify_admin_credentials(username: str, password: str, client_ip: str | None = None) -> tuple[bool, str]:
+    """Verify admin login with IP lockout protection against brute-force attacks."""
+    if client_ip and is_ip_locked(client_ip):
+        return False, "Security Lockout: Too many failed login attempts. Try again in 15 minutes."
+
     session = None
     try:
         session = _get_session()
         stmt = select(AdminUser).where(AdminUser.username == username.strip())
         admin_user = session.execute(stmt).scalars().first()
         hashed = hashlib.sha256(password.encode("utf-8")).hexdigest()
-        if admin_user:
-            return admin_user.password_hash == hashed
         
-        # Fallback to config settings
-        settings = get_settings()
-        import hmac
-        if hmac.compare_digest(username.strip(), settings.admin_username) and settings.admin_password_ok(password):
-            # Seed the AdminUser into DB automatically
-            try:
-                new_admin = AdminUser(username=username.strip(), password_hash=hashed)
-                session.add(new_admin)
-                session.commit()
-            except Exception:
-                session.rollback()
-            return True
-        return False
+        authenticated = False
+        if admin_user:
+            authenticated = (admin_user.password_hash == hashed)
+        else:
+            # Fallback to config settings
+            settings = get_settings()
+            import hmac
+            if hmac.compare_digest(username.strip(), settings.admin_username) and settings.admin_password_ok(password):
+                # Seed the AdminUser into DB automatically
+                try:
+                    new_admin = AdminUser(username=username.strip(), password_hash=hashed)
+                    session.add(new_admin)
+                    session.commit()
+                except Exception:
+                    session.rollback()
+                authenticated = True
+
+        if authenticated:
+            if client_ip:
+                clear_failed_logins(client_ip)
+            return True, "Authenticated"
+        else:
+            if client_ip:
+                record_failed_login(client_ip)
+            return False, "Invalid username or password."
     finally:
         if session is not None:
             session.close()
@@ -583,7 +599,8 @@ def change_admin_password(username: str, current_password: str, new_password: st
     """Change admin password and persist to database."""
     if not new_password or len(new_password) < 6:
         return False, "New password must be at least 6 characters long."
-    if not verify_admin_credentials(username, current_password):
+    ok, msg = verify_admin_credentials(username, current_password)
+    if not ok:
         return False, "Current password does not match."
     
     session = None
@@ -600,6 +617,198 @@ def change_admin_password(username: str, current_password: str, new_password: st
             session.add(admin_user)
         session.commit()
         return True, "Password changed successfully."
+    finally:
+        if session is not None:
+            session.close()
+
+
+# ---------------------------------------------------------------------------
+# Anti-Brute-Force & Security Protections
+# ---------------------------------------------------------------------------
+
+def is_ip_locked(ip_address: str, max_attempts: int = 5, window_minutes: int = 15) -> bool:
+    """Check if an IP is locked due to repeated failed logins."""
+    if not ip_address or ip_address in ("127.0.0.1", "::1", "localhost", "testclient"):
+        return False
+    session = None
+    try:
+        session = _get_session()
+        cutoff = _now() - timedelta(minutes=window_minutes)
+        stmt = select(func.count(FailedLogin.id)).where(
+            FailedLogin.ip_address == ip_address,
+            FailedLogin.attempted_at >= cutoff,
+        )
+        count = session.execute(stmt).scalar() or 0
+        return count >= max_attempts
+    finally:
+        if session is not None:
+            session.close()
+
+
+def record_failed_login(ip_address: str) -> None:
+    """Audit log a failed authentication attempt."""
+    if not ip_address or ip_address in ("127.0.0.1", "::1", "localhost", "testclient"):
+        return
+    session = None
+    try:
+        session = _get_session()
+        entry = FailedLogin(ip_address=ip_address, attempted_at=_now())
+        session.add(entry)
+        session.commit()
+    except Exception:
+        pass
+    finally:
+        if session is not None:
+            session.close()
+
+
+def clear_failed_logins(ip_address: str) -> None:
+    """Clear failed attempts upon successful authentication."""
+    if not ip_address:
+        return
+    session = None
+    try:
+        session = _get_session()
+        session.execute(delete(FailedLogin).where(FailedLogin.ip_address == ip_address))
+        session.commit()
+    except Exception:
+        pass
+    finally:
+        if session is not None:
+            session.close()
+
+
+# ---------------------------------------------------------------------------
+# Product Catalog Management (Multi-Software Support)
+# ---------------------------------------------------------------------------
+
+def list_products(search: str = "") -> list[dict[str, Any]]:
+    """List all registered products with aggregate license counts."""
+    session = None
+    try:
+        session = _get_session()
+        stmt = select(Product)
+        if search.strip():
+            like = f"%{search.strip().lower()}%"
+            stmt = stmt.where(or_(Product.name.ilike(like), Product.code.ilike(like), Product.prefix.ilike(like)))
+        products = session.execute(stmt.order_by(Product.id.asc())).scalars().all()
+        
+        result = []
+        for p in products:
+            total_lics = session.execute(select(func.count(License.id)).where(License.product == p.code)).scalar() or 0
+            bound_devs = session.execute(
+                select(func.count(License.id)).where(
+                    License.product == p.code,
+                    License.current_device.isnot(None),
+                    License.current_device != "",
+                )
+            ).scalar() or 0
+            result.append({
+                "id": p.id,
+                "name": p.name,
+                "code": p.code,
+                "prefix": p.prefix,
+                "description": p.description or "",
+                "is_active": p.is_active,
+                "default_device_limit": p.default_device_limit,
+                "total_licenses": total_lics,
+                "active_devices": bound_devs,
+                "created_at": p.created_at.isoformat() if p.created_at else None,
+            })
+        return result
+    finally:
+        if session is not None:
+            session.close()
+
+
+def create_product(
+    name: str,
+    code: str,
+    prefix: str,
+    description: str | None = None,
+    default_device_limit: int = 1,
+) -> dict[str, Any]:
+    """Register a new software product in the universal licensing catalog."""
+    session = None
+    try:
+        session = _get_session()
+        norm_code = code.strip().lower().replace("-", "_").replace(" ", "_")
+        norm_prefix = "".join(c for c in prefix.strip().upper() if c.isalnum())
+        if not norm_prefix:
+            norm_prefix = norm_code[:2].upper()
+
+        existing = session.execute(
+            select(Product).where(or_(Product.code == norm_code, Product.prefix == norm_prefix))
+        ).scalar_one_or_none()
+        if existing:
+            return {
+                "success": False,
+                "message": f"A software product with code '{norm_code}' or key prefix '{norm_prefix}' already exists.",
+            }
+
+        prod = Product(
+            name=name.strip(),
+            code=norm_code,
+            prefix=norm_prefix,
+            description=description.strip() if description else None,
+            is_active=True,
+            default_device_limit=max(1, min(50, default_device_limit)),
+        )
+        session.add(prod)
+        session.commit()
+        session.refresh(prod)
+        return {
+            "success": True,
+            "product": {
+                "id": prod.id,
+                "name": prod.name,
+                "code": prod.code,
+                "prefix": prod.prefix,
+                "description": prod.description or "",
+                "is_active": prod.is_active,
+                "default_device_limit": prod.default_device_limit,
+                "total_licenses": 0,
+                "active_devices": 0,
+                "created_at": prod.created_at.isoformat() if prod.created_at else None,
+            },
+        }
+    except Exception:
+        logger.exception("Failed to create product")
+        return {"success": False, "message": "Failed to create product."}
+    finally:
+        if session is not None:
+            session.close()
+
+
+def update_product(product_id: int, updates: dict[str, Any]) -> dict[str, Any] | None:
+    """Update product attributes or toggle active status."""
+    session = None
+    try:
+        session = _get_session()
+        prod = session.get(Product, product_id)
+        if prod is None:
+            return None
+        if "name" in updates and updates["name"]:
+            prod.name = updates["name"].strip()
+        if "prefix" in updates and updates["prefix"]:
+            prod.prefix = "".join(c for c in updates["prefix"].strip().upper() if c.isalnum())
+        if "description" in updates:
+            prod.description = updates["description"]
+        if "is_active" in updates and updates["is_active"] is not None:
+            prod.is_active = bool(updates["is_active"])
+        if "default_device_limit" in updates and updates["default_device_limit"]:
+            prod.default_device_limit = int(updates["default_device_limit"])
+        session.commit()
+        session.refresh(prod)
+        return {
+            "id": prod.id,
+            "name": prod.name,
+            "code": prod.code,
+            "prefix": prod.prefix,
+            "description": prod.description or "",
+            "is_active": prod.is_active,
+            "default_device_limit": prod.default_device_limit,
+        }
     finally:
         if session is not None:
             session.close()

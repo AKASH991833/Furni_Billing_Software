@@ -47,6 +47,50 @@ def init_db() -> None:
         bind=_engine, autoflush=False, autocommit=False, expire_on_commit=False
     )
     Base.metadata.create_all(bind=_engine)
+    _seed_default_products()
+
+
+def _seed_default_products() -> None:
+    """Pre-populate initial catalog if empty."""
+    from sqlalchemy import select
+    from app.models.models import Product
+
+    session = get_session()
+    try:
+        existing = session.execute(select(Product)).first()
+        if existing is None:
+            defaults = [
+                Product(
+                    code="furniture_bill",
+                    name="Furniture Billing Suite",
+                    prefix="FB",
+                    description="Commercial Desktop Furniture Billing & Estimation System",
+                    is_active=True,
+                    default_device_limit=1,
+                ),
+                Product(
+                    code="ac_service",
+                    name="AC Service & HVAC Manager",
+                    prefix="AC",
+                    description="AC Service, Maintenance & Invoicing Software",
+                    is_active=True,
+                    default_device_limit=1,
+                ),
+                Product(
+                    code="general_billing",
+                    name="General Commercial Billing",
+                    prefix="GB",
+                    description="Multi-Purpose Retail & Commercial Invoicing Software",
+                    is_active=True,
+                    default_device_limit=1,
+                ),
+            ]
+            session.add_all(defaults)
+            session.commit()
+    except Exception:
+        session.rollback()
+    finally:
+        session.close()
 
 
 def get_session() -> Session:
