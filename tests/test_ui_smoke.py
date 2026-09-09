@@ -41,10 +41,11 @@ class TestUIImports:
         from app.ui.pages.dashboard_page import DashboardPage
         from app.ui.pages.customers_page import CustomersPage, CustomerDialog
         from app.ui.pages.invoices_page import InvoicesPage
+        from app.ui.pages.workers_page import WorkersPage
         from app.ui.pages.reports_page import ReportsPage
         from app.ui.pages.settings_page import SettingsPage
         from app.ui.pages.base_page import BasePage
-        assert all([DashboardPage, CustomersPage, InvoicesPage,
+        assert all([DashboardPage, CustomersPage, InvoicesPage, WorkersPage,
                     ReportsPage, SettingsPage, BasePage])
 
     def test_import_invoice_editor(self):

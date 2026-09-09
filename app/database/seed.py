@@ -133,6 +133,12 @@ def _migrate_schema() -> None:
             ("pdf_primary_color", "VARCHAR(12)", "''"),
             ("pdf_secondary_color", "VARCHAR(12)", "''"),
             ("pdf_theme", "VARCHAR(30)", "'colour'"),
+            ("bank_name", "VARCHAR(120)", "''"),
+            ("account_number", "VARCHAR(60)", "''"),
+            ("ifsc_code", "VARCHAR(30)", "''"),
+            ("account_holder", "VARCHAR(120)", "''"),
+            ("upi_id", "VARCHAR(100)", "''"),
+            ("upi_qr_enabled", "BOOLEAN", "1"),
         ]:
             if col_name not in bp_cols:
                 conn.execute(text(

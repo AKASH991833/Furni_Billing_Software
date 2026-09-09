@@ -18,6 +18,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -76,6 +77,13 @@ class BusinessProfile(Base):
     pdf_primary_color = Column(String(12), default="")          # hex like #173560; empty = theme default
     pdf_secondary_color = Column(String(12), default="")        # hex like #C8A24B; empty = theme default
     pdf_theme = Column(String(30), default="colour")           # colour, classic, modern, minimal, elegant
+    # Bank & UPI Details
+    bank_name = Column(String(120), default="")
+    account_number = Column(String(60), default="")
+    ifsc_code = Column(String(30), default="")
+    account_holder = Column(String(120), default="")
+    upi_id = Column(String(100), default="")
+    upi_qr_enabled = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
 
@@ -210,3 +218,129 @@ class Setting(Base):
     key = Column(String(120), primary_key=True)
     value = Column(Text)
     updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
+
+
+class Worker(Base):
+    """Staff/Worker entity (Mistri, Carpenter, Labour, Helper, etc.)."""
+    __tablename__ = "workers"
+
+    id = Column(Integer, primary_key=True)
+    worker_code = Column(String(30), unique=True, nullable=False, index=True)
+    name = Column(String(150), nullable=False, index=True)
+    mobile = Column(String(30), index=True)
+    work_type = Column(String(80), default="Mistri", index=True)
+    daily_rate = Column(Numeric(10, 2), default=0.0)
+    joining_date = Column(Date, default=datetime.now(timezone.utc).date)
+    address = Column(Text, default="")
+    is_active = Column(Boolean, default=True, index=True)
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
+
+    attendances = relationship("WorkerAttendance", back_populates="worker", cascade="all, delete-orphan")
+    expenses = relationship("WorkerExpense", back_populates="worker", cascade="all, delete-orphan")
+    adjustments = relationship("WorkerAdjustment", back_populates="worker", cascade="all, delete-orphan")
+    advances = relationship("WorkerAdvance", back_populates="worker", cascade="all, delete-orphan")
+    settlements = relationship("WorkerSettlement", back_populates="worker", cascade="all, delete-orphan")
+
+
+class WorkerAttendance(Base):
+    """Daily attendance entry with preserved rate and calculated earning.
+    
+    Guarantees:
+      - (worker_id, attendance_date) is unique in DB.
+      - daily_rate is frozen at recording time to preserve rate history.
+      - daily_earning = daily_rate * day_multiplier.
+    """
+    __tablename__ = "worker_attendance"
+
+    id = Column(Integer, primary_key=True)
+    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=False, index=True)
+    attendance_date = Column(Date, nullable=False, index=True)
+    day_multiplier = Column(Numeric(4, 2), default=1.0)
+    status_label = Column(String(30), default="Full Day")
+    daily_rate = Column(Numeric(10, 2), nullable=False)
+    daily_earning = Column(Numeric(12, 2), nullable=False)
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+
+    __table_args__ = (
+        UniqueConstraint("worker_id", "attendance_date", name="uq_worker_attendance_date"),
+    )
+
+    worker = relationship("Worker", back_populates="attendances")
+
+
+class WorkerExpense(Base):
+    """Travel / Rickshaw / Site expenses incurred by worker (added to gross payable)."""
+    __tablename__ = "worker_expenses"
+
+    id = Column(Integer, primary_key=True)
+    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=False, index=True)
+    expense_date = Column(Date, nullable=False, index=True)
+    amount = Column(Numeric(12, 2), nullable=False)
+    category = Column(String(60), default="Rickshaw")
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+
+    worker = relationship("Worker", back_populates="expenses")
+
+
+class WorkerAdjustment(Base):
+    """Other additions (Bonus, Food) or deductions (Penalty) explicitly separated."""
+    __tablename__ = "worker_adjustments"
+
+    id = Column(Integer, primary_key=True)
+    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=False, index=True)
+    adjustment_date = Column(Date, nullable=False, index=True)
+    amount = Column(Numeric(12, 2), nullable=False)
+    adjustment_type = Column(String(20), nullable=False)  # ADDITION or DEDUCTION
+    category = Column(String(60), default="Bonus")
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+
+    worker = relationship("Worker", back_populates="adjustments")
+
+
+class WorkerAdvance(Base):
+    """Advance payment taken by worker (deducted from settlement, history preserved)."""
+    __tablename__ = "worker_advances"
+
+    id = Column(Integer, primary_key=True)
+    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=False, index=True)
+    advance_date = Column(Date, nullable=False, index=True)
+    amount = Column(Numeric(12, 2), nullable=False)
+    payment_method = Column(String(30), default="Cash")
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+
+    worker = relationship("Worker", back_populates="advances")
+
+
+class WorkerSettlement(Base):
+    """Monthly settlement record preserving calculation snapshot and payment status."""
+    __tablename__ = "worker_settlements"
+
+    id = Column(Integer, primary_key=True)
+    worker_id = Column(Integer, ForeignKey("workers.id"), nullable=False, index=True)
+    month_year = Column(String(10), nullable=False, index=True)  # e.g. "2026-09"
+    total_units = Column(Numeric(6, 2), default=0)
+    total_work_earning = Column(Numeric(12, 2), default=0)
+    total_travel = Column(Numeric(12, 2), default=0)
+    total_additions = Column(Numeric(12, 2), default=0)
+    gross_payable = Column(Numeric(12, 2), default=0)
+    total_advances = Column(Numeric(12, 2), default=0)
+    total_deductions = Column(Numeric(12, 2), default=0)
+    net_payable = Column(Numeric(12, 2), default=0)
+    paid_amount = Column(Numeric(12, 2), default=0)
+    payment_date = Column(Date, nullable=True)
+    payment_method = Column(String(30), default="Cash")
+    is_settled = Column(Boolean, default=True)
+    notes = Column(Text, default="")
+    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=datetime.now(timezone.utc), onupdate=datetime.now(timezone.utc))
+
+    worker = relationship("Worker", back_populates="settlements")
+
+
+

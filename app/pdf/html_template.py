@@ -124,6 +124,44 @@ def _encode_pillow(img, ext: str) -> bytes:
     return buf.getvalue()
 
 
+def _generate_upi_qr(upi_id: str | None, payee_name: str | None = "", amount: float = 0.0, note: str = "") -> str:
+    """Generate dynamic UPI QR code as a base64 PNG data URI.
+
+    Compatible with all major Indian UPI payment apps (Google Pay, PhonePe, Paytm, BHIM).
+    """
+    if not upi_id or not str(upi_id).strip():
+        return ""
+    try:
+        import urllib.parse
+        import qrcode
+        upi_clean = str(upi_id).strip()
+        payee_clean = str(payee_name or "").strip()
+        params = [f"pa={upi_clean}"]
+        if payee_clean:
+            params.append(f"pn={urllib.parse.quote(payee_clean)}")
+        if amount and amount > 0:
+            params.append(f"am={amount:.2f}")
+        params.append("cu=INR")
+        if note:
+            params.append(f"tn={urllib.parse.quote(note)}")
+        uri = f"upi://pay?{'&'.join(params)}"
+
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=5,
+            border=1,
+        )
+        qr.add_data(uri)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="#173560", back_color="#ffffff")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 # ---------------------------------------------------------------------------
 # Visual constants (defaults, overridden per-profile via build_css)
 # ---------------------------------------------------------------------------
@@ -242,8 +280,8 @@ def build_css(profile=None) -> str:
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { margin: 0; padding: 0; }
 body {
-  font-family: 'Segoe UI', 'Segoe UI Variable Text', Tahoma, Arial, sans-serif;
-  color: __INK__; font-size: 10.5px; line-height: 1.32;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Segoe UI Variable Text', 'Inter', Roboto, Arial, sans-serif;
+  color: __INK__; font-size: 10px; line-height: 1.35; -webkit-print-color-adjust: exact;
 }
 .page {
   width: __PW__mm; height: __PH__mm;
@@ -259,127 +297,159 @@ body {
 /* ---------- header ---------- */
 .head { width: 100%; display: flex; align-items: stretch; }
 .head-left { flex: 1 1 auto; display: flex; align-items: center; }
-.head-logo { margin-right: 6mm; display: flex; align-items: center; }
-.head-logo img { max-height: 20mm; min-height: 12mm; max-width: 45mm; width: auto; object-fit: contain; }
-.head-biz .hb-name { font-size: 22px; font-weight: 800; color: __NAVY__; letter-spacing: .3px; }
-.head-biz .hb-type { font-size: 9.5px; color: __GOLD_DARK__; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; margin-top: 1px; }
-.head-biz .hb-line { font-size: 9px; color: __MUTED__; margin-top: 1px; line-height: 1.45; }
-.head-biz .hb-mob { color: __RED__; font-weight: 800; font-size: 10.5px; }
-.head-right { text-align: right; margin-left: 6mm; }
+.head-logo { margin-right: 5mm; display: flex; align-items: center; }
+.head-logo img { max-height: 22mm; min-height: 12mm; max-width: 48mm; width: auto; object-fit: contain; }
+.head-biz .hb-name { font-size: 20.5px; font-weight: 800; color: __NAVY__; letter-spacing: .4px; text-transform: uppercase; }
+.head-biz .hb-type { font-size: 8.8px; color: __GOLD_DARK__; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; margin-top: 1px; }
+.head-biz .hb-line { font-size: 8.8px; color: __MUTED__; margin-top: 1.5px; line-height: 1.45; }
+.head-biz .hb-mob { color: __NAVY__; font-weight: 800; font-size: 9.8px; }
+.head-right { text-align: right; margin-left: 5mm; display: flex; flex-direction: column; align-items: flex-end; }
 .head-right .doc-title {
-  font-size: 20px; font-weight: 800; color: __BADGE_TEXT__; background: __NAVY__;
-  padding: 2.5mm 9mm; letter-spacing: 5px; display: inline-block;
-  border-bottom: 1.6mm solid __GOLD__;
+  font-size: 18px; font-weight: 800; color: __BADGE_TEXT__; background: __NAVY__;
+  padding: 2.2mm 7.5mm; letter-spacing: 3.5px; display: inline-block;
+  border-radius: 1mm 1mm 0 0;
+  border-bottom: 1.3mm solid __GOLD__;
 }
-.meta { margin-top: 2.5mm; }
+.meta { margin-top: 2mm; width: 100%; }
 .meta .mr {
   display: flex; justify-content: flex-end; align-items: center;
-  font-size: 9.5px; margin-top: 1mm;
+  font-size: 9px; margin-top: 0.8mm;
 }
-.meta .mk { color: __MUTED__; margin-right: 3mm; }
-.meta .mv { font-weight: 700; color: __INK__; }
-.head-band { height: 1.1mm; background: linear-gradient(90deg, __NAVY__ 0% 70%, __GOLD__ 70% 100%); margin-top: 3.5mm; }
+.meta .mk { color: __MUTED__; margin-right: 2.5mm; font-weight: 600; text-transform: uppercase; font-size: 7.8px; letter-spacing: 0.5px; }
+.meta .mv { font-weight: 800; color: __INK__; }
+.doc-badge {
+  display: inline-block; margin-top: 1.5mm; padding: 1mm 3.5mm;
+  border-radius: 0.8mm; font-size: 8.2px; font-weight: 800;
+  letter-spacing: 0.8px; text-transform: uppercase;
+}
+.badge-paid { background: #ECFDF5; color: #065F46; border: 0.3mm solid #6EE7B7; }
+.badge-partial { background: #FFFBEB; color: #92400E; border: 0.3mm solid #FCD34D; }
+.badge-due { background: #FEF2F2; color: #991B1B; border: 0.3mm solid #FCA5A5; }
+.head-band { height: 1.1mm; background: linear-gradient(90deg, __NAVY__ 0% 70%, __GOLD__ 70% 100%); margin-top: 3mm; border-radius: 0.5mm; }
 
-/* ---------- customer ---------- */
-.addr-grid { display: flex; gap: 4mm; margin-top: 4.5mm; }
+/* ---------- customer & site ---------- */
+.addr-grid { display: flex; gap: 3.5mm; margin-top: 3.5mm; width: 180mm; }
 .addr-box {
-  flex: 1 1 0; border: 0.3mm solid __BORDER__; border-top: 0.8mm solid __NAVY__;
-  border-radius: 1.2mm; padding: 2.4mm 3mm; background: __ADDR_BG__;
+  flex: 1 1 0; border: 0.25mm solid __BORDER__; border-top: 0.9mm solid __NAVY__;
+  border-radius: 1.2mm; padding: 2.2mm 3.2mm; background: __ADDR_BG__;
 }
-.addr-label { font-size: 8px; font-weight: 800; color: __GOLD_DARK__; letter-spacing: 1.4px; text-transform: uppercase; margin-bottom: 1.6mm; }
-.addr-name { font-size: 12px; font-weight: 800; color: __HEADING_TEXT__; margin-bottom: 1.2mm; }
-.addr-line { font-size: 9px; color: __MUTED__; margin-top: 1px; line-height: 1.45; }
-.cs-row { display: flex; align-items: baseline; justify-content: space-between; margin-top: 1.6mm; gap: 3mm; min-height: 0; }
-.cs-item { font-size: 9px; color: __MUTED__; line-height: 1.4; }
+.addr-box.site-box { border-top-color: __GOLD_DARK__; }
+.addr-label { font-size: 7.8px; font-weight: 800; color: __GOLD_DARK__; letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 1.2mm; }
+.addr-name { font-size: 11.5px; font-weight: 800; color: __HEADING_TEXT__; margin-bottom: 1mm; }
+.addr-line { font-size: 8.8px; color: __MUTED__; margin-top: 1px; line-height: 1.45; }
+.cs-row { display: flex; align-items: baseline; justify-content: space-between; margin-top: 1.4mm; gap: 3mm; min-height: 0; }
+.cs-item { font-size: 8.8px; color: __MUTED__; line-height: 1.4; }
 .cs-right { text-align: right; }
 .cs-key { font-weight: 800; color: __HEADING_TEXT__; margin-right: 1.5mm; }
 
 /* ---------- column headings ---------- */
 .thead {
   display: flex; align-items: stretch; width: 180mm;
-  background: __NAVY__; color: __THEAD_TEXT__; border-radius: 1mm;
-  border: 0.25mm solid __BORDER__;
+  background: __NAVY__; color: __THEAD_TEXT__; border-radius: 1mm 1mm 0 0;
+  border: 0.25mm solid __NAVY__;
   border-bottom: 0.9mm solid __GOLD__;
+  margin-top: 3.5mm;
 }
-.thead > div { padding: 2.4mm 2mm; font-size: 11px; font-weight: 800; letter-spacing: .4px; color: __THEAD_TEXT__; }
-.thead > div + div { border-left: 0.25mm solid __BORDER__; }
+.thead > div { padding: 2.2mm 2mm; font-size: 9.5px; font-weight: 800; letter-spacing: .5px; color: __THEAD_TEXT__; }
+.thead > div + div { border-left: 0.25mm solid rgba(255, 255, 255, 0.15); }
 .t-ar { text-align: right; }
 
 /* ---------- item rows ---------- */
 .r { display: flex; align-items: stretch; width: 180mm; border-left: 0.25mm solid __BORDER__; border-right: 0.25mm solid __BORDER__; border-bottom: 0.25mm solid __BORDER__; }
-.r > div { padding: 1.1mm 2.5mm; overflow: hidden; }
+.r > div { padding: 1.2mm 2.2mm; overflow: hidden; }
 .r > div + div { border-left: 0.25mm solid __BORDER__; }
 .r.alt { background: __ROW_ALT__; }
 .c-sn   { width: __CSN__mm; min-width: __CSN__mm; font-weight: 800; color: __HEADING_TEXT__; text-align: center; }
-.c-desc { width: __CDESC__mm; min-width: __CDESC__mm; flex: 1 1 auto; font-size: 10px; color: __ROW_TEXT__; }
-.c-desc b { color: __ROW_TEXT__; font-weight: 600; }
-.c-size { width: __CSIZE__mm; min-width: __CSIZE__mm; font-size: 10px; color: __MUTED__; white-space: nowrap; }
-.c-qty  { width: __CQTY__mm; min-width: __CQTY__mm; font-size: 10px; text-align: center; color: __ROW_TEXT__; }
-.c-rate { width: __CRATE__mm; min-width: __CRATE__mm; font-size: 10px; text-align: right; color: __ROW_TEXT__; }
-.c-amt  { width: __CAMT__mm; min-width: __CAMT__mm; font-size: 10px; text-align: right; font-weight: 800; color: __ROW_TEXT__; white-space: nowrap; }
+.c-desc { width: __CDESC__mm; min-width: __CDESC__mm; flex: 1 1 auto; font-size: 9.5px; color: __ROW_TEXT__; }
+.c-desc b { color: __ROW_TEXT__; font-weight: 700; }
+.c-size { width: __CSIZE__mm; min-width: __CSIZE__mm; font-size: 9.2px; color: __MUTED__; white-space: nowrap; }
+.c-qty  { width: __CQTY__mm; min-width: __CQTY__mm; font-size: 9.5px; text-align: center; color: __ROW_TEXT__; }
+.c-rate { width: __CRATE__mm; min-width: __CRATE__mm; font-size: 9.5px; text-align: right; color: __ROW_TEXT__; }
+.c-amt  { width: __CAMT__mm; min-width: __CAMT__mm; font-size: 9.6px; text-align: right; font-weight: 800; color: __ROW_TEXT__; white-space: nowrap; }
 
 .area-row {
-  display: flex; align-items: center; justify-content: center; text-align: center;
+  display: flex; align-items: center; justify-content: flex-start;
   margin-top: 2.2mm; margin-bottom: 0.5mm;
-  background: __SECTION_BG__; border-left: 1.4mm solid __GOLD__; border-right: 1.4mm solid __GOLD__;
+  background: __SECTION_BG__; border-left: 1.4mm solid __GOLD__; border-right: 0.25mm solid __BORDER__;
   width: 180mm; border-radius: 0 1mm 1mm 0;
+  padding: 1.3mm 3mm;
 }
 .area-row .area-txt {
-  font-size: 26.7px; font-weight: 800; color: __HEADING_TEXT__;
-  letter-spacing: 1.6px; text-transform: uppercase;
-  padding: 2mm 3mm;
+  font-size: 10.5px; font-weight: 800; color: __HEADING_TEXT__;
+  letter-spacing: 1.2px; text-transform: uppercase;
 }
 
 .area-total {
   display: flex; align-items: center; justify-content: flex-end;
-  margin-top: 1mm; margin-bottom: 1mm;
-  background: __AREA_TOTAL_BG__; border-bottom: 0.5mm solid __GOLD__;
-  width: 180mm; border-radius: 0 1mm 1mm 0;
-  padding: 1.9mm 3mm;
+  margin-top: 0.6mm; margin-bottom: 0.8mm;
+  background: __AREA_TOTAL_BG__; border-bottom: 0.4mm solid __GOLD__;
+  border-left: 0.25mm solid __BORDER__; border-right: 0.25mm solid __BORDER__;
+  width: 180mm; border-radius: 0 0 1mm 1mm;
+  padding: 1.4mm 3mm;
 }
-.area-total .at-name { font-size: 13px; font-weight: 800; color: __HEADING_TEXT__; margin-right: auto; }
-.area-total .at-val { font-size: 15px; font-weight: 800; color: __RED__; }
+.area-total .at-name { font-size: 9.5px; font-weight: 800; color: __HEADING_TEXT__; margin-right: auto; letter-spacing: 0.5px; }
+.area-total .at-val { font-size: 11px; font-weight: 800; color: __RED__; }
 
-/* ---------- totals ---------- */
-.totals { margin-top: 2.5mm; margin-left: auto; width: 120mm; }
-.trow { display: flex; align-items: center; width: 120mm; padding: 1.2mm 2mm; }
-.tlbl { flex: 1 1 auto; font-size: 16px; font-weight: 800; color: __MUTED__; text-align: right; }
-.tval { width: 46mm; text-align: right; font-size: 18px; font-weight: 800; color: __ROW_TEXT__; }
-.grand {
-  margin-top: 1.5mm; background: __GRAND_BG__; border: 0.5mm solid __GOLD__; border-radius: 1.2mm;
-  padding: 2mm 3mm; display: flex; align-items: center; width: 120mm;
+/* ---------- financial & totals block ---------- */
+.tot-container {
+  display: flex; gap: 3.5mm; align-items: stretch; justify-content: space-between;
+  width: 180mm; margin-top: 2.5mm;
 }
-.grand .glbl { font-size: 20px; font-weight: 800; color: __GOLD__; letter-spacing: 1.4px; flex: 1 1 auto; text-align: right; }
-.grand .gval { width: 58mm; text-align: right; font-size: 18px; font-weight: 800; color: __RED__; white-space: nowrap; }
+.bank-card {
+  flex: 1 1 0; border: 0.25mm solid __BORDER__; border-top: 0.8mm solid __GOLD__;
+  border-radius: 1.2mm; padding: 2.2mm 3mm; background: __ADDR_BG__;
+  display: flex; gap: 3mm; align-items: center;
+}
+.bank-info { flex: 1 1 auto; }
+.bank-label { font-size: 7.8px; font-weight: 800; color: __GOLD_DARK__; letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 1.2mm; }
+.bank-row { font-size: 8.6px; color: __MUTED__; margin-top: 0.7mm; line-height: 1.35; }
+.bank-key { font-weight: 800; color: __HEADING_TEXT__; margin-right: 1.5mm; }
+.bank-val { font-weight: 600; color: __INK__; }
+.bank-qr { width: 23mm; text-align: center; display: flex; flex-direction: column; align-items: center; }
+.bank-qr img { width: 21mm; height: 21mm; border: 0.2mm solid __BORDER__; border-radius: 0.8mm; }
+.bank-qr-lbl { font-size: 6.8px; font-weight: 800; color: __MUTED__; margin-top: 0.8mm; text-transform: uppercase; letter-spacing: 0.4px; }
+
+.totals { width: 92mm; margin-left: auto; }
+.trow { display: flex; align-items: center; width: 100%; padding: 1.1mm 2mm; border-bottom: 0.2mm solid rgba(0,0,0,0.03); }
+.tlbl { flex: 1 1 auto; font-size: 9.6px; font-weight: 700; color: __MUTED__; text-align: right; }
+.tval { width: 38mm; text-align: right; font-size: 10.2px; font-weight: 700; color: __ROW_TEXT__; }
+.grand {
+  margin-top: 1.4mm; background: __GRAND_BG__; border: 0.4mm solid __GOLD__; border-radius: 1.2mm;
+  padding: 1.8mm 3mm; display: flex; align-items: center; width: 100%;
+}
+.grand .glbl { font-size: 11.5px; font-weight: 800; color: __GOLD__; letter-spacing: 1.2px; flex: 1 1 auto; text-align: right; }
+.grand .gval { width: 44mm; text-align: right; font-size: 13.5px; font-weight: 800; color: __GRAND_TEXT__; white-space: nowrap; }
 
 /* ---------- words ---------- */
 .words {
-  margin-top: 2mm; border: 0.3mm solid __BORDER__; border-left: 1mm solid __GOLD__;
-  background: __WORDS_BG__; padding: 1.8mm 3mm; width: 100%;
+  margin-top: 2mm; border: 0.25mm solid __BORDER__; border-left: 1mm solid __GOLD__;
+  background: __WORDS_BG__; padding: 1.8mm 3mm; width: 180mm; border-radius: 0 1mm 1mm 0;
 }
-.words .wk { font-size: 8.5px; font-weight: 800; color: __GOLD_DARK__; letter-spacing: 1.2px; text-transform: uppercase; }
-.words .wv { font-size: 10.5px; font-weight: 700; color: __HEADING_TEXT__; margin-top: 0.8mm; }
+.words .wk { font-size: 7.8px; font-weight: 800; color: __GOLD_DARK__; letter-spacing: 1.2px; text-transform: uppercase; }
+.words .wv { font-size: 9.6px; font-weight: 700; color: __HEADING_TEXT__; margin-top: 0.6mm; }
 
 /* ---------- terms ---------- */
-.terms { margin-top: 2mm; width: 100%; }
-.terms .tk { font-size: 8.5px; font-weight: 800; color: __GOLD_DARK__; letter-spacing: 1.2px; text-transform: uppercase; }
-.terms .tv { font-size: 8.8px; color: __MUTED__; margin-top: 1mm; line-height: 1.35; white-space: pre-line; }
+.terms { margin-top: 2mm; width: 180mm; }
+.terms .tk { font-size: 7.8px; font-weight: 800; color: __GOLD_DARK__; letter-spacing: 1.2px; text-transform: uppercase; }
+.terms .tv { font-size: 8.4px; color: __MUTED__; margin-top: 0.8mm; line-height: 1.35; white-space: pre-line; }
 
 /* ---------- signature ---------- */
-.sign-row { margin-top: 1.5mm; display: flex; justify-content: flex-end; }
-.sign-box { text-align: center; }
-.sign-line { width: 52mm; border-top: 0.4mm solid __INK__; margin-top: 4mm; padding-top: 1.3mm; font-size: 9.6px; font-weight: 700; color: __HEADING_TEXT__; }
-.sign-tag { font-size: 8px; color: __MUTED__; letter-spacing: 1px; margin-top: 1mm; }
+.sign-row { margin-top: 3mm; display: flex; justify-content: space-between; align-items: flex-end; width: 180mm; }
+.sign-box-left { text-align: left; }
+.sign-box { text-align: right; }
+.sign-line-cust { width: 55mm; border-top: 0.35mm dashed __MUTED__; margin-top: 7mm; padding-top: 1.2mm; font-size: 8.8px; font-weight: 700; color: __HEADING_TEXT__; text-align: center; }
+.sign-line { width: 55mm; border-top: 0.35mm solid __INK__; margin-top: 7mm; padding-top: 1.2mm; font-size: 8.8px; font-weight: 700; color: __HEADING_TEXT__; text-align: center; }
+.sign-tag { font-size: 7.5px; color: __MUTED__; letter-spacing: 0.8px; margin-top: 0.8mm; text-align: center; }
 
 /* ---------- footer ---------- */
 .foot {
   position: absolute; left: __MARGIN__mm; right: __MARGIN__mm; bottom: __MARGIN__mm;
-  border-top: 0.4mm solid __FOOTER_BORDER__; padding-top: 1.6mm;
-  display: flex; align-items: center;
+  border-top: 0.35mm solid __FOOTER_BORDER__; padding-top: 1.5mm;
+  display: flex; align-items: center; width: 180mm;
 }
-.foot-left { flex: 1 1 auto; font-size: 8.2px; color: __FOOTER_TEXT__; line-height: 1.5; }
-.foot-thanks { font-size: 8.6px; font-style: italic; color: __GOLD_DARK__; }
-.foot-right { text-align: right; font-size: 8.2px; color: __FOOTER_TEXT__; }
+.foot-left { flex: 1 1 auto; font-size: 8px; color: __FOOTER_TEXT__; line-height: 1.45; }
+.foot-thanks { font-size: 8.4px; font-style: italic; color: __GOLD_DARK__; }
+.foot-right { text-align: right; font-size: 8px; color: __FOOTER_TEXT__; }
 .foot-right .pg { font-weight: 700; color: __HEADING_TEXT__; }
 
 /* measurement harness */
@@ -479,6 +549,23 @@ def _area_total_row(blk_id, name, total, currency):
 
 def build_layout(profile, invoice, customer, project, items) -> Layout:
     layout = Layout()
+    currency = _esc(profile.currency if profile else "₹")
+
+    # ---------------- Payments & Status Calculation ----------------
+    payments = getattr(invoice, "payments", []) or []
+    total_paid = sum(float(p.amount or 0) for p in payments)
+    grand_tot = float(invoice.grand_total or 0)
+    balance_due = max(grand_tot - total_paid, 0.0)
+
+    if total_paid >= grand_tot and total_paid > 0:
+        status_cls = "badge-paid"
+        status_lbl = "PAID IN FULL"
+    elif total_paid > 0:
+        status_cls = "badge-partial"
+        status_lbl = f"PARTIAL · DUE: {_money_inr(balance_due, currency)}"
+    else:
+        status_cls = "badge-due"
+        status_lbl = "PAYMENT DUE"
 
     # ---------------- header ----------------
     logo = _media_to_data_uri(profile.logo_path if profile else None, upscale_min=96)
@@ -491,9 +578,9 @@ def build_layout(profile, invoice, customer, project, items) -> Layout:
         if profile.mobile:
             biz_lines.append(f'Mobile: <span class="hb-mob">{_esc(profile.mobile)}</span>')
         if profile.email:
-            biz_lines.append(f"Email: {profile.email}")
+            biz_lines.append(f"Email: {_esc(profile.email)}")
         if profile.gstin and profile.show_gst:
-            biz_lines.append(f"GSTIN: {profile.gstin}")
+            biz_lines.append(f"GSTIN: {_esc(profile.gstin)}")
         addr = profile.address or ""
         city_line = " ".join(x for x in [profile.city, profile.state, profile.pincode] if x)
         if city_line:
@@ -504,6 +591,7 @@ def build_layout(profile, invoice, customer, project, items) -> Layout:
 
     inv_date = invoice.invoice_date.strftime("%d-%b-%Y") if invoice.invoice_date else "-"
     due_date = invoice.due_date.strftime("%d-%b-%Y") if invoice.due_date else "-"
+    doc_title = "TAX INVOICE" if (profile and profile.show_gst and float(getattr(invoice, "gst_amount", 0) or 0) > 0) else "INVOICE"
 
     layout.header_html = (
         f'<div class="head" id="BLK-HEAD">'
@@ -513,22 +601,21 @@ def build_layout(profile, invoice, customer, project, items) -> Layout:
         f'    <div class="hb-line">{biz_detail}&nbsp;</div>'
         f'  </div></div>'
         f'  <div class="head-right">'
-        f'    <div class="doc-title">INVOICE</div>'
+        f'    <div class="doc-title">{doc_title}</div>'
         f'    <div class="meta">'
         f'      <div class="mr"><span class="mk">Invoice No</span><span class="mv">{_esc(invoice.invoice_number)}</span></div>'
         f'      <div class="mr"><span class="mk">Date</span><span class="mv">{inv_date}</span></div>'
         f'      <div class="mr"><span class="mk">Due Date</span><span class="mv">{due_date}</span></div>'
         f'    </div>'
+        f'    <div class="doc-badge {status_cls}">{status_lbl}</div>'
         f'  </div>'
         f'</div>'
         f'<div class="head-band"></div>'
     )
 
-    # ---------------- bill to / project (single compact section) ----------------
+    # ---------------- bill to & site / reference (symmetric 2-card grid) ----------------
     cust_name = customer.name if customer else "-"
-
     addr_parts = []
-    site_display = ""
     contact = ""
     if customer:
         if customer.address:
@@ -540,6 +627,7 @@ def build_layout(profile, invoice, customer, project, items) -> Layout:
             contact = customer.mobile.strip()
     cust_addr = ", ".join(_esc(x) for x in addr_parts)
 
+    site_display = ""
     if project and (project.name or "").strip():
         site_display = project.name.strip()
     elif project and (project.site_address or "").strip():
@@ -547,40 +635,54 @@ def build_layout(profile, invoice, customer, project, items) -> Layout:
     if not site_display and (invoice.site_address or "").strip():
         site_display = invoice.site_address.strip()
 
-    cust_gst = f'<div class="addr-line">GSTIN: {_esc(customer.gstin)}</div>' \
+    cust_gst = f'<div class="addr-line"><span class="cs-key">GSTIN</span>{_esc(customer.gstin)}</div>' \
         if (customer and customer.gstin and profile and profile.show_gst) else ""
 
-    bits = ['<div class="addr-label">Bill To</div>',
-            f'<div class="addr-name">{_esc(cust_name)}</div>']
+    left_bits = [
+        '<div class="addr-label">Billed To</div>',
+        f'<div class="addr-name">{_esc(cust_name)}</div>',
+    ]
     if cust_addr:
-        bits.append(f'<div class="addr-line"><span class="cs-key">Address</span>{cust_addr}</div>')
-    cs_items = []
+        left_bits.append(f'<div class="addr-line"><span class="cs-key">Address</span>{cust_addr}</div>')
     if contact:
-        cs_items.append(f'<span class="cs-item"><span class="cs-key">Contact</span>{_esc(contact)}</span>')
-    if site_display:
-        cs_items.append(f'<span class="cs-item cs-right"><span class="cs-key">Site</span>{_esc(site_display)}</span>')
-    if cs_items:
-        bits.append(f'<div class="cs-row">{"".join(cs_items)}</div>{cust_gst}')
-    else:
-        bits.append(cust_gst)
+        left_bits.append(f'<div class="addr-line"><span class="cs-key">Phone</span>{_esc(contact)}</div>')
+    if cust_gst:
+        left_bits.append(cust_gst)
 
-    layout.billto_html = f'<div class="addr-box" id="BLK-GRID">{"".join(bits)}</div>'
+    right_bits = []
+    if site_display:
+        right_bits.append('<div class="addr-label">Project / Delivery Site</div>')
+        right_bits.append(f'<div class="addr-name">{_esc(site_display)}</div>')
+        if project and project.site_address and project.site_address != site_display:
+            right_bits.append(f'<div class="addr-line">{_esc(project.site_address)}</div>')
+    else:
+        right_bits.append('<div class="addr-label">Billing Reference</div>')
+        right_bits.append(f'<div class="addr-name">Terms: Due on Receipt</div>')
+        place_of_supply = f"{customer.state}" if (customer and customer.state) else (profile.state if profile and profile.state else "Standard")
+        right_bits.append(f'<div class="addr-line"><span class="cs-key">Place of Supply</span>{_esc(place_of_supply)}</div>')
+        right_bits.append(f'<div class="addr-line"><span class="cs-key">Currency</span>Indian Rupee (INR)</div>')
+
+    layout.billto_html = (
+        f'<div class="addr-grid" id="BLK-GRID">'
+        f'  <div class="addr-box">{"".join(left_bits)}</div>'
+        f'  <div class="addr-box site-box">{"".join(right_bits)}</div>'
+        f'</div>'
+    )
     layout.billto_only = True
 
     # ---------------- column headings ----------------
     layout.thead_html = (
         f'<div class="thead">'
         f'<div class="c-sn">S.N.</div>'
-        f'<div class="c-desc">DESCRIPTION</div>'
+        f'<div class="c-desc">DESCRIPTION &amp; SPECIFICATIONS</div>'
         f'<div class="c-size">SIZE</div>'
         f'<div class="c-qty t-ar">QTY</div>'
-        f'<div class="c-rate t-ar">RATE ({_esc(profile.currency if profile else "₹")})</div>'
-        f'<div class="c-amt t-ar">AMOUNT ({_esc(profile.currency if profile else "₹")})</div>'
+        f'<div class="c-rate t-ar">RATE ({currency})</div>'
+        f'<div class="c-amt t-ar">AMOUNT ({currency})</div>'
         f'</div>'
     )
 
     # ---------------- items ----------------
-    currency = _esc(profile.currency if profile else "₹")
     area_totals = _compute_area_totals_from_items(items)
     prev_area = None
     alt = False
@@ -606,7 +708,7 @@ def build_layout(profile, invoice, customer, project, items) -> Layout:
                 _area_total_row(f"AT-{sn}", area, area_totals.get(area, 0.0), currency),
             ))
 
-    # ---------------- totals ----------------
+    # ---------------- totals & financial breakdown ----------------
     show_gst = bool(getattr(invoice, "gst_enabled", True))
     subt = float(invoice.subtotal or 0)
     disc = float(invoice.discount or 0)
@@ -623,15 +725,10 @@ def build_layout(profile, invoice, customer, project, items) -> Layout:
         rows += (f'<div class="trow"><span class="tlbl">GST ({_fmt_raw(invoice.gst_rate)}%)</span>'
                  f'<span class="tval">{_money_inr(invoice.gst_amount, currency)}</span></div>')
 
-    # Payments & Advance summary
-    payments = getattr(invoice, "payments", []) or []
-    total_paid = sum(float(p.amount or 0) for p in payments)
-    balance_due = max(float(invoice.grand_total or 0) - total_paid, 0.0)
-
     payment_rows = ""
     if total_paid > 0:
         payment_rows += (
-            f'<div class="trow" style="margin-top:1.5mm;border-top:0.3mm dashed __BORDER__;padding-top:1.5mm;">'
+            f'<div class="trow" style="margin-top:1.2mm;border-top:0.3mm dashed #10B981;padding-top:1.2mm;">'
             f'<span class="tlbl" style="color:#059669;font-weight:800;">Advance / Paid</span>'
             f'<span class="tval" style="color:#059669;font-weight:800;">{_money_inr(total_paid, currency)}</span></div>'
         )
@@ -643,12 +740,69 @@ def build_layout(profile, invoice, customer, project, items) -> Layout:
             f'<span class="tval" style="color:{bal_col};font-weight:800;">{bal_txt}</span></div>'
         )
 
+    # Bank details & UPI QR Code box
+    bank_name = getattr(profile, "bank_name", "") if profile else ""
+    account_no = getattr(profile, "account_number", "") if profile else ""
+    ifsc_code = getattr(profile, "ifsc_code", "") if profile else ""
+    account_holder = getattr(profile, "account_holder", "") if profile else ""
+    upi_id = getattr(profile, "upi_id", "") if profile else ""
+    upi_qr_enabled = getattr(profile, "upi_qr_enabled", True) if profile else True
+
+    qr_amount = balance_due if balance_due > 0 else grand_tot
+    qr_data_uri = _generate_upi_qr(
+        upi_id,
+        account_holder or biz_name,
+        amount=qr_amount,
+        note=f"Invoice {invoice.invoice_number}",
+    ) if (upi_id and upi_qr_enabled) else ""
+
+    bank_bits = []
+    if bank_name:
+        bank_bits.append(f'<div class="bank-row"><span class="bank-key">Bank</span><span class="bank-val">{_esc(bank_name)}</span></div>')
+    if account_no:
+        bank_bits.append(f'<div class="bank-row"><span class="bank-key">A/C No</span><span class="bank-val">{_esc(account_no)}</span></div>')
+    if ifsc_code:
+        bank_bits.append(f'<div class="bank-row"><span class="bank-key">IFSC</span><span class="bank-val">{_esc(ifsc_code)}</span></div>')
+    if account_holder:
+        bank_bits.append(f'<div class="bank-row"><span class="bank-key">A/C Name</span><span class="bank-val">{_esc(account_holder)}</span></div>')
+    if upi_id:
+        bank_bits.append(f'<div class="bank-row"><span class="bank-key">UPI ID</span><span class="bank-val">{_esc(upi_id)}</span></div>')
+
+    if not bank_bits:
+        # Default professional payment notice
+        bank_inner = (
+            f'<div class="bank-info">'
+            f'  <div class="bank-label">Payment Information</div>'
+            f'  <div class="bank-row">Accepted: NEFT / RTGS / IMPS / UPI / Cheque</div>'
+            f'  <div class="bank-row">Please quote invoice number <b>{_esc(invoice.invoice_number)}</b> with remittance.</div>'
+            f'</div>'
+        )
+    else:
+        qr_html = ""
+        if qr_data_uri:
+            qr_html = (
+                f'<div class="bank-qr">'
+                f'  <img src="{qr_data_uri}" alt="UPI QR"/>'
+                f'  <div class="bank-qr-lbl">Scan to Pay</div>'
+                f'</div>'
+            )
+        bank_inner = (
+            f'<div class="bank-info">'
+            f'  <div class="bank-label">Bank &amp; Payment Details</div>'
+            f'  {"".join(bank_bits)}'
+            f'</div>'
+            f'{qr_html}'
+        )
+
     totals_html = (
-        f'<div class="totals" id="BLK-TOT">'
-        f'{rows}'
-        f'<div class="grand"><span class="glbl">GRAND TOTAL</span>'
-        f'<span class="gval">{_money_inr(invoice.grand_total, currency)}</span></div>'
-        f'{payment_rows}'
+        f'<div class="tot-container" id="BLK-TOT">'
+        f'  <div class="bank-card">{bank_inner}</div>'
+        f'  <div class="totals">'
+        f'    {rows}'
+        f'    <div class="grand"><span class="glbl">GRAND TOTAL</span>'
+        f'    <span class="gval">{_money_inr(invoice.grand_total, currency)}</span></div>'
+        f'    {payment_rows}'
+        f'  </div>'
         f'</div>'
     )
     layout.final.append(("BLK-TOT", totals_html))
@@ -666,14 +820,21 @@ def build_layout(profile, invoice, customer, project, items) -> Layout:
             (f'<div class="terms" id="BLK-TERMS"><div class="tk">Terms &amp; Conditions</div>'
              f'<div class="tv">{_esc(terms)}</div></div>')))
 
-    # ---------------- signature ----------------
+    # ---------------- signature (dual block: customer acceptance + authorized signatory) ----------------
     sig_img = _media_to_data_uri(profile.signature_path if profile else None)
     sig_inner = (f'<img src="{sig_img}" style="max-width:48mm; max-height:18mm;"/>'
                  if sig_img else
-                 '<div class="sign-line">Authorized Signatory</div>')
+                 f'<div class="sign-line">For {_esc(biz_name)}</div>')
     layout.final.append(("BLK-SIG",
-        (f'<div class="sign-row" id="BLK-SIG"><div class="sign-box">{sig_inner}'
-         f'<div class="sign-tag">AUTHORIZED SIGNATURE</div></div></div>')))
+        (f'<div class="sign-row" id="BLK-SIG">'
+         f'  <div class="sign-box-left">'
+         f'    <div class="sign-line-cust">Customer Signature</div>'
+         f'    <div class="sign-tag">ACCEPTED &amp; RECEIVED IN GOOD ORDER</div>'
+         f'  </div>'
+         f'  <div class="sign-box">{sig_inner}'
+         f'    <div class="sign-tag">AUTHORIZED SIGNATURE</div>'
+         f'  </div>'
+         f'</div>')))
 
     return layout
 

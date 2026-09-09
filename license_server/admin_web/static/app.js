@@ -85,6 +85,30 @@
     document.body.removeChild(ta);
   }
 
+  // ---- Toast Notification ----
+  function toast(msg, type = "ok") {
+    if (!msg) return;
+    let wrap = $("#toast-wrap");
+    if (!wrap) {
+      wrap = document.createElement("div");
+      wrap.id = "toast-wrap";
+      wrap.className = "toast-container";
+      document.body.appendChild(wrap);
+    }
+    const el = document.createElement("div");
+    el.className = "toast " + (type === "err" ? "err" : "ok");
+    el.textContent = msg;
+    wrap.appendChild(el);
+    setTimeout(() => {
+      el.style.transition = "opacity 0.3s ease, transform 0.3s ease";
+      el.style.opacity = "0";
+      el.style.transform = "translateX(100%)";
+      setTimeout(() => {
+        if (el.parentNode) el.parentNode.removeChild(el);
+      }, 300);
+    }, 3500);
+  }
+
   // ---- View Switching ----
   function showLogin() {
     $("#login-view").classList.remove("hidden");
@@ -555,7 +579,10 @@
     showModal('<h2>Generate Commercial License</h2>'
       + '<p class="sub">Issue a cryptographically signed license key for a customer.</p>'
       + '<div class="form-group">'
-      +   '<label for="m-lic-cust">Customer Account *</label>'
+      +   '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
+      +     '<label for="m-lic-cust" style="margin:0;">Customer Account *</label>'
+      +     '<a href="javascript:void(0)" id="m-quick-add-cust" style="font-size:12px;color:#818CF8;text-decoration:none;font-weight:600;">+ Add New Customer</a>'
+      +   '</div>'
       +   '<select id="m-lic-cust">' + opts + '</select>'
       + '</div>'
       + '<div class="form-group">'
@@ -579,6 +606,7 @@
       +   '<button class="btn btn-primary" id="m-save-lic">Generate License Key</button>'
       + '</div>');
 
+    $("#m-quick-add-cust").onclick = () => showCustomerModal();
     $("#m-cancel").onclick = hideModal;
     $("#m-save-lic").onclick = async () => {
       const cid = parseInt($("#m-lic-cust").value);

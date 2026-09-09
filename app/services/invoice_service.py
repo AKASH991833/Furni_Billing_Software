@@ -444,3 +444,44 @@ def list_all_invoices(limit: int = 500):
         )
     finally:
         session.close()
+
+
+def duplicate_invoice(invoice_id: int) -> Invoice:
+    """Duplicate an existing invoice as a new DRAFT with next sequence number."""
+    session = get_session()
+    try:
+        orig = session.query(Invoice).options(
+            selectinload(Invoice.items)
+        ).filter(Invoice.id == invoice_id).first()
+        if orig is None:
+            raise ValueError(f"Invoice {invoice_id} not found.")
+
+        from app.services.business_service import get_invoice_prefix
+        prefix = get_invoice_prefix()
+
+        items_data = []
+        for it in (orig.items or []):
+            items_data.append({
+                "area": it.area,
+                "description": it.description,
+                "size": it.size,
+                "qty_raw": it.qty_raw,
+                "rate_raw": it.rate_raw,
+            })
+
+        data = {
+            "customer_id": orig.customer_id,
+            "project_id": orig.project_id,
+            "invoice_date": datetime.now(tz=timezone.utc).date(),
+            "due_date": orig.due_date,
+            "site_address": orig.site_address,
+            "status": "DRAFT",
+            "discount": orig.discount,
+            "gst_enabled": orig.gst_enabled,
+            "gst_rate": orig.gst_rate,
+            "notes": f"Duplicated from {orig.invoice_number}" + (f"\n{orig.notes}" if orig.notes else ""),
+            "invoice_prefix": prefix,
+        }
+        return create_invoice(data, items_data)
+    finally:
+        session.close()

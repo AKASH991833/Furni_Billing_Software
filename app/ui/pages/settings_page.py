@@ -412,6 +412,42 @@ class SettingsPage(BasePage):
         details_card.layout().addLayout(form)
         v.addWidget(details_card)
 
+        # Bank & UPI Details Card
+        bank_card = card("Bank & UPI Payment Details (Printed on Invoices & QR Code)")
+        bank_note = QLabel(
+            "Enter your official bank and UPI details. A dynamic scan-and-pay UPI QR code "
+            "will be automatically generated and printed on your invoices for instant client payments."
+        )
+        bank_note.setWordWrap(True)
+        bank_note.setStyleSheet(f"color:{_dark_or_light('#9CA3AF', '#6B7280')}; font-size: 12px;")
+        bank_card.layout().addWidget(bank_note)
+
+        bf = QFormLayout()
+        bf.setVerticalSpacing(10)
+        bf.setLabelAlignment(Qt.AlignRight)
+
+        self.f_bank_name = QLineEdit()
+        self.f_bank_name.setPlaceholderText("e.g. State Bank of India / HDFC Bank / ICICI")
+        self.f_account_number = QLineEdit()
+        self.f_account_number.setPlaceholderText("e.g. 50100428912345")
+        self.f_ifsc_code = QLineEdit()
+        self.f_ifsc_code.setPlaceholderText("e.g. SBIN0001234")
+        self.f_account_holder = QLineEdit()
+        self.f_account_holder.setPlaceholderText("e.g. MAHENDRA VISHWAKARMA")
+        self.f_upi_id = QLineEdit()
+        self.f_upi_id.setPlaceholderText("e.g. 9876543210@paytm or business@okhdfcbank")
+        self.cb_upi_qr = QCheckBox("Generate & print dynamic UPI QR code on invoice")
+        self.cb_upi_qr.setChecked(True)
+
+        bf.addRow(_lab("Bank Name"), self.f_bank_name)
+        bf.addRow(_lab("Account Number"), self.f_account_number)
+        bf.addRow(_lab("IFSC Code"), self.f_ifsc_code)
+        bf.addRow(_lab("Account Holder"), self.f_account_holder)
+        bf.addRow(_lab("UPI ID / VPA"), self.f_upi_id)
+        bf.addRow(_lab(""), self.cb_upi_qr)
+        bank_card.layout().addLayout(bf)
+        v.addWidget(bank_card)
+
         # ---- Invoice Defaults card ----
         defaults_card = card("Invoice Defaults (Cell Formatting)")
         desc = QLabel(
@@ -880,6 +916,13 @@ class SettingsPage(BasePage):
             "terms_conditions": self.f_terms.toPlainText(),
             "show_gst": self.cb_show_gst.isChecked(),
             "default_gst_rate": self.sp_gst_rate.value(),
+            # Bank & UPI details
+            "bank_name": self.f_bank_name.text().strip(),
+            "account_number": self.f_account_number.text().strip(),
+            "ifsc_code": self.f_ifsc_code.text().strip().upper(),
+            "account_holder": self.f_account_holder.text().strip(),
+            "upi_id": self.f_upi_id.text().strip(),
+            "upi_qr_enabled": self.cb_upi_qr.isChecked(),
             # Invoice cell formatting defaults
             "default_font_family": self.f_default_font.currentText() if self.f_default_font.currentIndex() > 0 else "",
             "default_font_size": self.sp_default_font_size.value(),
@@ -937,6 +980,14 @@ class SettingsPage(BasePage):
             self.sp_gst_rate.setValue(float(p.default_gst_rate or 0))
         except (TypeError, ValueError):
             self.sp_gst_rate.setValue(0)
+
+        # Load bank & UPI details
+        self.f_bank_name.setText(getattr(p, "bank_name", "") or "")
+        self.f_account_number.setText(getattr(p, "account_number", "") or "")
+        self.f_ifsc_code.setText(getattr(p, "ifsc_code", "") or "")
+        self.f_account_holder.setText(getattr(p, "account_holder", "") or "")
+        self.f_upi_id.setText(getattr(p, "upi_id", "") or "")
+        self.cb_upi_qr.setChecked(bool(getattr(p, "upi_qr_enabled", True)))
 
         # Load invoice cell formatting defaults
         font_family = getattr(p, "default_font_family", "") or ""

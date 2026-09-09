@@ -149,3 +149,116 @@ def customer_payments(customer_id: int) -> list[Payment]:
         )
     finally:
         session.close()
+
+
+def get_customers_with_summary(query: str = "", limit: int = 300) -> list[dict]:
+    """Batch-fetch customers with their aggregated invoices, payments, and balances.
+
+    Performs batched aggregation in 3 queries, completely avoiding N+1 overhead.
+    """
+    session = get_session()
+    try:
+        q = session.query(Customer)
+        if query:
+            pat = f"%{query}%"
+            q = q.filter(
+                or_(
+                    Customer.name.ilike(pat),
+                    Customer.mobile.ilike(pat),
+                    Customer.email.ilike(pat),
+                    Customer.city.ilike(pat),
+                    Customer.gstin.ilike(pat),
+                )
+            )
+        customers = q.order_by(Customer.name).limit(limit).all()
+
+        # Batch query invoice totals grouped by customer_id
+        inv_rows = (
+            session.query(
+                Invoice.customer_id,
+                func.coalesce(func.sum(Invoice.grand_total), 0),
+                func.count(Invoice.id),
+            )
+            .filter(Invoice.status != "DRAFT")
+            .group_by(Invoice.customer_id)
+            .all()
+        )
+        inv_map = {row[0]: (float(row[1]), int(row[2])) for row in inv_rows}
+
+        # Batch query payment totals grouped by invoice.customer_id
+        pay_rows = (
+            session.query(
+                Invoice.customer_id,
+                func.coalesce(func.sum(Payment.amount), 0),
+            )
+            .join(Payment, Payment.invoice_id == Invoice.id)
+            .filter(Invoice.status != "DRAFT")
+            .group_by(Invoice.customer_id)
+            .all()
+        )
+        pay_map = {row[0]: float(row[1]) for row in pay_rows}
+
+        results = []
+        for c in customers:
+            inv_total, inv_count = inv_map.get(c.id, (0.0, 0))
+            paid_total = pay_map.get(c.id, 0.0)
+            due = max(inv_total - paid_total, 0.0)
+            results.append({
+                "id": c.id,
+                "customer": c,
+                "name": c.name or "Unnamed Client",
+                "mobile": c.mobile or "-",
+                "email": c.email or "-",
+                "city": c.city or "-",
+                "state": c.state or "-",
+                "gstin": c.gstin or "",
+                "total_invoiced": inv_total,
+                "invoice_count": inv_count,
+                "total_paid": paid_total,
+                "outstanding": due,
+                "is_settled": due <= 0.01,
+                "has_gstin": bool(c.gstin and c.gstin.strip()),
+            })
+        return results
+    finally:
+        session.close()
+
+
+def customers_kpi_overview() -> dict:
+    """Directory-wide metrics: total clients, active, receivables, settled."""
+    session = get_session()
+    try:
+        total_customers = session.query(func.count(Customer.id)).scalar() or 0
+
+        # Total billed across non-draft invoices
+        total_billed = (
+            session.query(func.coalesce(func.sum(Invoice.grand_total), 0))
+            .filter(Invoice.status != "DRAFT")
+            .scalar() or 0
+        )
+        # Total collected across non-draft invoices
+        total_paid = (
+            session.query(func.coalesce(func.sum(Payment.amount), 0))
+            .join(Invoice, Payment.invoice_id == Invoice.id)
+            .filter(Invoice.status != "DRAFT")
+            .scalar() or 0
+        )
+        receivables = max(float(total_billed) - float(total_paid), 0.0)
+
+        # Clients with at least one non-draft invoice
+        active_clients = (
+            session.query(func.count(func.distinct(Invoice.customer_id)))
+            .filter(Invoice.status != "DRAFT")
+            .scalar() or 0
+        )
+
+        return {
+            "total_customers": int(total_customers),
+            "active_clients": int(active_clients),
+            "total_receivables": float(receivables),
+            "total_billed": float(total_billed),
+            "total_paid": float(total_paid),
+        }
+    finally:
+        session.close()
+

@@ -14,14 +14,27 @@ NAV_ITEMS = [
     ("dashboard", "Home", "\u2302"),
     ("customers", "Customers", "\U0001F465"),
     ("invoices", "Invoices", "\U0001F4C4"),
+    ("workers", "Workers", "\U0001F477"),
     ("reports", "Reports", "\U0001F4CA"),
     ("settings", "Settings", "\u2699\uFE0F"),
 ]
 
-NAV_FORWARD = {"dashboard": "Home", "customers": "Customers",
-              "invoices": "Invoices", "reports": "Reports", "settings": "Settings"}
-NAV_BACKWARD = {"Home": "dashboard", "Customers": "customers",
-                "Invoices": "invoices", "Reports": "reports", "Settings": "settings"}
+NAV_FORWARD = {
+    "dashboard": "Home",
+    "customers": "Customers",
+    "invoices": "Invoices",
+    "workers": "Workers",
+    "reports": "Reports",
+    "settings": "Settings",
+}
+NAV_BACKWARD = {
+    "Home": "dashboard",
+    "Customers": "customers",
+    "Invoices": "invoices",
+    "Workers": "workers",
+    "Reports": "reports",
+    "Settings": "settings",
+}
 
 
 class Sidebar(QFrame):

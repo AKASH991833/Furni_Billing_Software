@@ -84,7 +84,7 @@ def _get_pdf_view() -> QWebEngineView:
         # Pre-configure for faster rendering
         _pdf_view.settings().setAttribute(QWebEngineSettings.JavascriptEnabled, True)
         _pdf_view.settings().setAttribute(QWebEngineSettings.PluginsEnabled, False)
-        _pdf_view.settings().setAttribute(QWebEngineSettings.AutoLoadImages, False)
+        _pdf_view.settings().setAttribute(QWebEngineSettings.AutoLoadImages, True)
     return _pdf_view
 
 
@@ -139,11 +139,29 @@ def _print_html_to_file(view: QWebEngineView, html: str, destination: Path) -> N
             result["error"] = e
             loop.quit()
 
-    view.page().loadFinished.connect(lambda _o: _generate())
+    connected = True
+
+    def _on_load_finished(_ok):
+        nonlocal connected
+        if connected:
+            try:
+                view.page().loadFinished.disconnect(_on_load_finished)
+                connected = False
+            except (RuntimeError, RuntimeWarning):
+                pass
+        _generate()
+
+    view.page().loadFinished.connect(_on_load_finished)
     view.setHtml(html, QUrl("about:blank"))
 
     loop.exec()
     watchdog.stop()
+    if connected:
+        try:
+            view.page().loadFinished.disconnect(_on_load_finished)
+            connected = False
+        except (RuntimeError, RuntimeWarning):
+            pass
 
     if result.get("ok") and result["data"]:
         Path(destination).write_bytes(result["data"])

@@ -189,3 +189,33 @@ def monthly_income_for_year(months: int = 12) -> list[dict]:
         return result
     finally:
         session.close()
+
+
+def top_pending_collections(limit: int = 5) -> list[dict]:
+    """Return top customers with outstanding balances for follow-up."""
+    session = get_session()
+    try:
+        customers = session.query(Customer).options(
+            selectinload(Customer.invoices).selectinload(Invoice.payments)
+        ).all()
+        results = []
+        for c in customers:
+            total_invoiced = 0.0
+            total_paid = 0.0
+            for inv in (c.invoices or []):
+                if inv.status != "DRAFT":
+                    total_invoiced += float(inv.grand_total or 0)
+                    for p in (inv.payments or []):
+                        total_paid += float(p.amount or 0)
+            bal = max(total_invoiced - total_paid, 0.0)
+            if bal > 0:
+                results.append({
+                    "customer_id": c.id,
+                    "customer_name": c.name,
+                    "mobile": c.mobile or "",
+                    "outstanding": bal,
+                })
+        results.sort(key=lambda x: x["outstanding"], reverse=True)
+        return results[:limit]
+    finally:
+        session.close()

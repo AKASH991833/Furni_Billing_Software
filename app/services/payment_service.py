@@ -106,3 +106,9 @@ def delete_payment(payment_id: int) -> bool:
         return False
     finally:
         session.close()
+
+
+# Ergonomic aliases
+record_payment = add_payment
+list_payments = list_payments_for_invoice
+

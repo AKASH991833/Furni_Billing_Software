@@ -15,6 +15,7 @@ from app.ui.pages.dashboard_page import DashboardPage
 from app.ui.pages.invoices_page import InvoicesPage
 from app.ui.pages.reports_page import ReportsPage
 from app.ui.pages.settings_page import SettingsPage
+from app.ui.pages.workers_page import WorkersPage
 from app.ui.style import STYLESHEET
 from app.ui.widgets.common import Toast
 from app.ui.widgets.header import Header
@@ -56,6 +57,7 @@ class MainWindow(QMainWindow):
             "dashboard": DashboardPage(self),
             "customers": CustomersPage(self),
             "invoices": InvoicesPage(self),
+            "workers": WorkersPage(self),
             "reports": ReportsPage(self),
             "settings": SettingsPage(self),
         }
@@ -111,6 +113,7 @@ class MainWindow(QMainWindow):
             "dashboard": "Your business at a glance",
             "customers": "Manage your customers",
             "invoices": "Create and manage invoices",
+            "workers": "Daily attendance, advances, travel & salary calculation",
             "reports": "Income and outstanding reports",
             "settings": "Business profile and preferences",
         }

@@ -68,6 +68,9 @@ def save_profile(data: dict) -> BusinessProfile:
             "pdf_margin_left", "pdf_margin_right",
             "pdf_primary_color", "pdf_secondary_color",
             "pdf_theme",
+            # Bank & UPI Details
+            "bank_name", "account_number", "ifsc_code",
+            "account_holder", "upi_id", "upi_qr_enabled",
         ):
             if key in data:
                 setattr(profile, key, data[key])

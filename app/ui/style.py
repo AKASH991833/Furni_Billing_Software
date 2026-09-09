@@ -252,7 +252,10 @@ QTableView {{
     selection-color: {TEXT};
 }}
 QTableView::item {{
-    padding: 6px 8px;
+    padding-left: 8px;
+    padding-right: 8px;
+    padding-top: 2px;
+    padding-bottom: 2px;
 }}
 QTableView::item:selected {{
     background: rgba(37, 99, 235, 0.1);
@@ -451,29 +454,154 @@ QWidget#invoiceEditor QDateEdit {{
 QWidget#invoiceEditor QLineEdit:focus,
 QWidget#invoiceEditor QComboBox:focus,
 QWidget#invoiceEditor QDateEdit:focus {{
-    background: {GLASS_INPUT_FOCUS};
+    background: #FFFFFF;
     border: 1.5px solid {PRIMARY};
 }}
 QWidget#invoiceEditor QLineEdit:read-only {{
-    background: rgba(243, 244, 246, 0.5);
-    color: {TEXT_MUTED};
+    background: rgba(243, 244, 246, 0.7);
+    color: #1E293B;
 }}
 
 /* --- Invoice editor internal controls (compact — no horizontal scroll) --- */
 QWidget#invoiceEditor QPushButton {{
-    padding: 4px 9px;
+    padding: 4px 10px;
     font-size: 11px;
     background: {GLASS_BUTTON};
-    border: 1px solid rgba(200, 210, 230, 0.5);
+    border: 1px solid rgba(200, 210, 230, 0.7);
+    border-radius: 6px;
 }}
 QWidget#invoiceEditor QPushButton:hover {{
     background: {GLASS_BUTTON_HOVER};
-    border-color: rgba(37, 99, 235, 0.3);
+    border-color: rgba(37, 99, 235, 0.4);
+}}
+QWidget#invoiceEditor QPushButton#editorSaveBtn {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #059669, stop:1 #10B981);
+    color: #FFFFFF;
+    border: none;
+    border-radius: 8px;
+    font-weight: 700;
+    padding: 7px 20px;
+    font-size: 12px;
+}}
+QWidget#invoiceEditor QPushButton#editorSaveBtn:hover {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #047857, stop:1 #059669);
+    color: #FFFFFF;
+}}
+QWidget#invoiceEditor QPushButton#editorDraftBtn {{
+    background: #FFFFFF;
+    border: 1px solid #CBD5E1;
+    border-radius: 8px;
+    color: #475569;
+    font-weight: 600;
+    padding: 7px 16px;
+    font-size: 12px;
+}}
+QWidget#invoiceEditor QPushButton#editorDraftBtn:hover {{
+    background: #F8FAFC;
+    border-color: {PRIMARY};
+    color: {PRIMARY};
+}}
+QWidget#invoiceEditor QPushButton#editorBackBtn {{
+    background: #FFFFFF;
+    border: 1px solid #CBD5E1;
+    border-radius: 8px;
+    color: #1E293B;
+    font-weight: 600;
+    padding: 7px 14px;
+    font-size: 12px;
+}}
+QWidget#invoiceEditor QPushButton#editorBackBtn:hover {{
+    background: #F8FAFC;
+    border-color: {NAVY};
+    color: {NAVY};
+}}
+QWidget#invoiceEditor QPushButton#editorPaymentBtn {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563EB, stop:1 #3B82F6);
+    color: #FFFFFF;
+    border: none;
+    border-radius: 8px;
+    font-weight: 600;
+    padding: 7px 16px;
+    font-size: 12px;
+}}
+QWidget#invoiceEditor QPushButton#editorPaymentBtn:hover {{
+    background: #1D4ED8;
+}}
+QWidget#invoiceEditor QPushButton#primaryButton {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {NAVY}, stop:1 #1E4B85);
+    color: #FFFFFF;
+    font-weight: 700;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    padding: 5px 14px;
+    font-size: 11px;
+}}
+QWidget#invoiceEditor QPushButton#primaryButton:hover {{
+    background: #0F2547;
+    border-color: {GOLD};
+    color: #FFFFFF;
+}}
+QWidget#invoiceEditor QPushButton#duePresetBtn {{
+    background: #F1F5F9;
+    border: 1px solid #CBD5E1;
+    border-radius: 4px;
+    color: #334155;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 1px 2px;
+}}
+QWidget#invoiceEditor QPushButton#duePresetBtn:hover {{
+    background: #E2E8F0;
+    border-color: #94A3B8;
+    color: #0F172A;
+}}
+QWidget#invoiceEditor QPushButton#rowIconButton {{
+    background: #F8FAFC;
+    border: 1px solid #CBD5E1;
+    border-radius: 4px;
+    color: #334155;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 0;
+}}
+QWidget#invoiceEditor QPushButton#rowIconButton:hover {{
+    background: #E2E8F0;
+    border-color: #94A3B8;
+    color: #0F172A;
+}}
+QWidget#invoiceEditor QPushButton#rowEditButton {{
+    background: #EFF6FF;
+    border: 1px solid #BFDBFE;
+    border-radius: 4px;
+    color: #2563EB;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 0;
+}}
+QWidget#invoiceEditor QPushButton#rowEditButton:hover {{
+    background: #DBEAFE;
+    border-color: #93C5FD;
+    color: #1D4ED8;
+}}
+QWidget#invoiceEditor QPushButton#rowDeleteButton {{
+    background: #FEF2F2;
+    border: 1px solid #FECACA;
+    border-radius: 4px;
+    color: #DC2626;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 0;
+}}
+QWidget#invoiceEditor QPushButton#rowDeleteButton:hover {{
+    background: #FEE2E2;
+    border-color: #FCA5A5;
+    color: #B91C1C;
 }}
 QWidget#invoiceEditor QLineEdit, QWidget#invoiceEditor QComboBox,
 QWidget#invoiceEditor QDateEdit, QWidget#invoiceEditor QDoubleSpinBox {{
-    padding: 2px 6px;
-    font-size: 11px;
+    padding: 4px 8px;
+    font-size: 12px;
+    border-radius: 6px;
 }}
 /* --- Invoice editor single page scroll (details → items → summary) --- */
 QScrollArea#editorPageScroll {{
@@ -494,65 +622,66 @@ QLabel#toolbarGroupLabel {{
 
 /* --- Item tables — Excel-like clear grid --- */
 QTableWidget {{
-    background: rgba(255, 255, 255, 0.95);
-    alternate-background-color: rgba(244, 247, 252, 0.5);
-    border: 2px solid rgba(184, 196, 216, 0.7);
+    background: #FFFFFF;
+    alternate-background-color: #F8FAFC;
+    border: 1px solid #CBD5E1;
     border-radius: 8px;
-    gridline-color: rgba(184, 196, 216, 0.6);
+    gridline-color: #E2E8F0;
     selection-background-color: rgba(219, 234, 254, 0.8);
     selection-color: {TEXT};
-    color: {TEXT};
+    color: #0F172A;
     font-size: 13px;
 }}
 QTableWidget::item {{
-    color: {TEXT};
+    color: #0F172A;
     padding: 4px 8px;
-    border-bottom: 1px solid rgba(184, 196, 216, 0.5);
-    border-right: 1px solid rgba(184, 196, 216, 0.5);
+    border-bottom: 1px solid #E2E8F0;
+    border-right: 1px solid #E2E8F0;
 }}
 QTableWidget::item:selected {{
     background: rgba(219, 234, 254, 0.8);
-    color: {TEXT};
+    color: #0F172A;
 }}
 QTableWidget::item:focus {{
-    background: rgba(239, 243, 250, 0.7);
-    color: {TEXT};
+    background: #EFF6FF;
+    color: #0F172A;
 }}
 QTableWidget::item:hover {{
-    background: rgba(232, 238, 247, 0.6);
+    background: #F1F5F9;
 }}
 /* Table inputs — white background, dark navy text, clear border (never invisible) */
 QTableWidget QLineEdit {{
-    background: {GLASS_INPUT};
-    border: 1px solid rgba(203, 213, 225, 0.6);
-    border-radius: 4px;
+    background: #FFFFFF;
+    border: 1px solid #CBD5E1;
+    border-radius: 6px;
     padding: 4px 8px;
     font-size: 13px;
-    color: #172033;
+    color: #0F172A;
     selection-background-color: {PRIMARY};
     selection-color: {WHITE};
 }}
 QTableWidget QLineEdit:hover {{
-    border-color: rgba(167, 180, 203, 0.8);
+    border-color: #94A3B8;
 }}
 QTableWidget QLineEdit:focus {{
-    background: {GLASS_INPUT_FOCUS};
+    background: #FFFFFF;
     border: 2px solid {PRIMARY};
-    border-radius: 4px;
-    color: #172033;
+    border-radius: 6px;
+    color: #0F172A;
     font-size: 13px;
 }}
 QTableWidget QLineEdit:read-only {{
-    background: rgba(243, 245, 249, 0.6);
-    color: #172033;
+    background: #F1F5F9;
+    color: #0F172A;
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 700;
+    border: 1px solid #E2E8F0;
 }}
 /* Table input placeholder text — clearly visible */
 QTableWidget QLineEdit::placeholder {{
     color: #94A3B8;
     font-style: italic;
-    font-size: 13px;
+    font-size: 12px;
 }}
 /* Table header — dark navy with clear column separators */
 QHeaderView::section {{
@@ -562,7 +691,7 @@ QHeaderView::section {{
     font-weight: 700;
     font-size: 11px;
     letter-spacing: 0.5px;
-    padding: 10px 12px;
+    padding: 8px 10px;
     border: none;
     border-right: 1px solid rgba(255, 255, 255, 0.2);
 }}
@@ -782,96 +911,87 @@ QPushButton#rowEditButton:hover {{
 }}
 QFrame#areaTotalBar {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(23, 53, 96, 0.04), stop:1 rgba(199, 162, 75, 0.06));
-    border: 1px solid rgba(168, 133, 47, 0.3);
+        stop:0 #F8FAFC, stop:0.5 #FFFFFF, stop:1 #F1F5F9);
+    border: 1px solid #CBD5E1;
     border-radius: 8px;
-    padding: 4px 12px;
+    padding: 6px 14px;
 }}
 QLabel#areaTotalName {{
-    color: {NAVY_DARK};
-    font-size: 11px;
+    color: #0F2547;
+    font-size: 12px;
     font-weight: 800;
     letter-spacing: 0.5px;
 }}
 QLabel#areaTotalValue {{
-    color: {NAVY_DARK};
-    font-size: 13px;
+    color: #173560;
+    font-size: 15px;
     font-weight: 800;
 }}
 
-/* --- Area sections (frosted glass depth) --- */
+/* --- Area sections (executive card depth) --- */
 QFrame#areaBanner {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(23, 53, 96, 0.06), stop:0.5 rgba(199, 162, 75, 0.08), stop:1 rgba(23, 53, 96, 0.04));
-    border: 1px solid rgba(168, 133, 47, 0.35);
+        stop:0 #F1F5F9, stop:0.5 #FFFFFF, stop:1 #F8FAFC);
+    border: 1px solid #CBD5E1;
     border-left: 5px solid {GOLD_DARK};
     border-radius: 10px;
+    padding: 4px 8px;
 }}
-QPushButton#areaCollapseBtn {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 rgba(23,53,96,0.92), stop:1 rgba(30,75,133,0.88));
-    color: {WHITE};
-    border: none;
-    border-radius: 5px;
-    font-size: 12px;
-    font-weight: 700;
-    padding: 0 6px;
-    min-height: 24px;
-}}
-QPushButton#areaCollapseBtn:hover {{
-    background: {NAVY_DARK};
-}}
-QPushButton#areaAddBtn {{
-    background: {GRADIENT_GOLD};
-    color: {NAVY_DARK};
+QPushButton#areaCollapseBtn,
+QWidget#invoiceEditor QPushButton#areaCollapseBtn {{
+    background: #0F2547;
+    color: #FFFFFF;
     border: none;
     border-radius: 6px;
-    font-size: 11px;
-    font-weight: 800;
-    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    padding: 0 4px;
+    min-height: 26px;
 }}
-QPushButton#areaAddBtn:hover {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #C7A24B, stop:0.5 #D4AF5A, stop:1 #E6D9B8);
+QPushButton#areaCollapseBtn:hover,
+QWidget#invoiceEditor QPushButton#areaCollapseBtn:hover {{
+    background: #173560;
+    color: #FFFFFF;
+}}
+QPushButton#areaAddBtn,
+QWidget#invoiceEditor QPushButton#areaAddBtn {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #173560, stop:1 #1E4B85);
+    color: #FFFFFF;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 5px 14px;
+}}
+QPushButton#areaAddBtn:hover,
+QWidget#invoiceEditor QPushButton#areaAddBtn:hover {{
+    background: #0F2547;
+    border-color: {GOLD};
+    color: #FFFFFF;
 }}
 QFrame#areaSection {{
-    background: {GLASS_FROSTED_DEEP};
-    border: 1px solid rgba(203, 213, 225, 0.5);
-    border-radius: 14px;
-    border-top: 2px solid rgba(199, 162, 75, 0.25);
+    background: #FFFFFF;
+    border: 1px solid #CBD5E1;
+    border-radius: 12px;
 }}
 QFrame#areaSection:hover {{
-    border-color: rgba(199, 162, 75, 0.4);
-    border-top-color: rgba(199, 162, 75, 0.5);
-}}
-/* Vertical splitter between area sections — mouse-draggable resize handles */
-QSplitter#areaSplitter::handle {{
-    background: transparent;
-}}
-QSplitter#areaSplitter::handle:vertical {{
-    height: 10px;
-    background: rgba(23, 53, 96, 0.15);
-    border-radius: 5px;
-    margin: 0 2px;
-    border-bottom: 1px solid rgba(23, 53, 96, 0.2);
-}}
-QSplitter#areaSplitter::handle:vertical:hover {{
-    background: rgba(199, 162, 75, 0.4);
-    border-bottom-color: rgba(199, 162, 75, 0.6);
+    border-color: #94A3B8;
 }}
 QLabel#areaHeading {{
-    color: {NAVY_DARK};
+    color: #0F2547;
     background: transparent;
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 800;
-    letter-spacing: 1px;
-    padding: 0 6px;
+    letter-spacing: 0.5px;
+    padding: 0 4px;
 }}
 QLabel#areaCountBadge {{
-    color: {NAVY_DARK};
-    background: rgba(255, 255, 255, 0.9);
-    border: 1px solid rgba(168, 133, 47, 0.4);
+    color: #173560;
+    background: #EFF6FF;
+    border: 1px solid #BFDBFE;
     border-radius: 10px;
     padding: 2px 10px;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
 }}
 
@@ -888,52 +1008,11 @@ QLabel#editorTitle {{
     font-weight: 800;
     letter-spacing: -0.3px;
 }}
-QPushButton#editorSaveBtn {{
-    background: {GRADIENT_PRIMARY};
-    color: {WHITE};
-    border: none;
-    border-radius: 8px;
-    font-weight: 600;
-    padding: 7px 18px;
-    font-size: 12px;
-}}
-QPushButton#editorSaveBtn:hover {{
-    background: {GRADIENT_PRIMARY_HOVER};
-    color: {WHITE};
-}}
-QPushButton#editorDraftBtn {{
-    background: {GLASS_BUTTON};
-    border: 1px solid rgba(200, 210, 230, 0.6);
-    border-radius: 8px;
-    color: {TEXT_MUTED};
-    font-weight: 600;
-    padding: 7px 16px;
-    font-size: 12px;
-}}
-QPushButton#editorDraftBtn:hover {{
-    background: {GLASS_BUTTON_HOVER};
-    border-color: rgba(37, 99, 235, 0.3);
-    color: {PRIMARY};
-}}
-QPushButton#editorBackBtn {{
-    background: rgba(255, 255, 255, 0.6);
-    border: 1px solid rgba(200, 210, 230, 0.5);
-    border-radius: 8px;
-    color: {TEXT};
-    font-weight: 600;
-    padding: 7px 14px;
-    font-size: 12px;
-}}
-QPushButton#editorBackBtn:hover {{
-    background: {GLASS_BUTTON_HOVER};
-    border-color: rgba(23, 53, 96, 0.3);
-    color: {NAVY};
-}}
 
 /* --- Due date quick presets --- */
 QPushButton#duePresetBtn {{
-    background: rgba(239, 243, 250, 0.7);
-    border: 1px solid rgba(200, 210, 230, 0.4);
+    background: #F1F5F9;
+    border: 1px solid #CBD5E1;
     border-radius: 6px;
     color: {NAVY};
     font-size: 10px;
@@ -941,8 +1020,8 @@ QPushButton#duePresetBtn {{
     padding: 2px 6px;
 }}
 QPushButton#duePresetBtn:hover {{
-    background: rgba(239, 243, 250, 0.9);
-    border-color: rgba(23, 53, 96, 0.3);
+    background: #E2E8F0;
+    border-color: {NAVY};
 }}
 QPushButton#duePresetBtn:pressed {{
     background: {NAVY};
@@ -1083,15 +1162,15 @@ QTableWidget#dashTable::item:hover {{
     background: rgba(239, 243, 250, 0.5);
 }}
 QTableWidget#dashTable QHeaderView::section {{
-    background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(243,244,246,0.9), stop:1 rgba(237,240,247,0.85));
-    color: {TEXT_MUTED};
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 {NAVY_DARK}, stop:0.5 {NAVY}, stop:1 {NAVY_LIGHTER});
+    color: {WHITE};
     font-weight: 700;
     font-size: 11px;
-    letter-spacing: 0.3px;
+    letter-spacing: 0.4px;
     padding: 9px 10px;
     border: none;
-    border-bottom: 1px solid rgba(200, 210, 230, 0.4);
-    border-right: 1px solid rgba(200, 210, 230, 0.3);
+    border-right: 1px solid rgba(255, 255, 255, 0.15);
 }}
 
 /* --- Dashboard alert banner (glass danger) --- */
@@ -1112,6 +1191,73 @@ QLabel#dashAlertText {{
 /* ================================================================
    Invoices List — Enhanced Glassmorphism + Depth
    ================================================================ */
+
+/* --- Financial KPI summary cards --- */
+QFrame#invoicesKpiCard {{
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 10px;
+    padding: 10px 14px;
+}}
+QFrame#invoicesKpiCard:hover {{
+    border-color: #CBD5E1;
+}}
+QLabel#invoicesKpiLabel {{
+    font-size: 10px;
+    font-weight: 700;
+    color: #64748B;
+    letter-spacing: 0.5px;
+}}
+QLabel#invoicesKpiValue {{
+    font-size: 18px;
+    font-weight: 800;
+    color: #0F172A;
+}}
+
+/* --- Status filter pills bar --- */
+QPushButton#invoiceFilterPill {{
+    background: #F1F5F9;
+    border: 1px solid #E2E8F0;
+    border-radius: 15px;
+    padding: 5px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #475569;
+}}
+QPushButton#invoiceFilterPill:hover {{
+    background: #E2E8F0;
+    color: #0F172A;
+}}
+QPushButton#invoiceFilterPill[active="true"] {{
+    background: #173560;
+    border-color: #173560;
+    color: #FFFFFF;
+    font-weight: 700;
+}}
+QPushButton#invoiceExportBtn {{
+    background: #FFFFFF;
+    border: 1px solid #CBD5E1;
+    border-radius: 8px;
+    padding: 7px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #334155;
+}}
+QPushButton#invoiceExportBtn:hover {{
+    background: #F8FAFC;
+    border-color: {PRIMARY};
+    color: {PRIMARY};
+}}
+QPushButton#invRowActionBtn {{
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 0;
+    min-width: 26px;
+    max-width: 26px;
+    min-height: 26px;
+    max-height: 26px;
+}}
 
 /* --- Search bar (glass) --- */
 QLineEdit#invoiceSearch {{
@@ -1625,39 +1771,71 @@ QTableWidget#customersTable QHeaderView::section {{
     border-right: 1px solid rgba(255, 255, 255, 0.15);
 }}
 
-/* --- Customers detail card (glass) --- */
+/* --- Customers detail card & directory --- */
 QFrame#customerDetail {{
-    background: {GLASS_FROSTED_LIGHT};
-    border: 1px solid rgba(200, 210, 230, 0.5);
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
     border-radius: 14px;
 }}
+QFrame#customerAvatar {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1E3A8A, stop:1 #3B82F6);
+    border-radius: 24px;
+    min-width: 48px;
+    max-width: 48px;
+    min-height: 48px;
+    max-height: 48px;
+}}
+QLabel#customerAvatarText {{
+    color: #FFFFFF;
+    font-size: 16px;
+    font-weight: 800;
+}}
 QLabel#customerDetailName {{
-    color: {NAVY};
+    color: #0F172A;
     font-size: 18px;
     font-weight: 800;
 }}
 QLabel#customerDetailLabel {{
-    color: {TEXT_MUTED};
+    color: #64748B;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.4px;
 }}
 QLabel#customerDetailValue {{
-    color: {TEXT};
+    color: #1E293B;
     font-size: 13px;
     font-weight: 500;
 }}
 
+/* Mini financial KPI cards inside detail */
+QFrame#customerKpiMini {{
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+    padding: 6px 10px;
+}}
+QLabel#customerKpiMiniVal {{
+    font-size: 15px;
+    font-weight: 800;
+}}
+QLabel#customerKpiMiniLbl {{
+    font-size: 10px;
+    font-weight: 700;
+    color: #64748B;
+    text-transform: uppercase;
+}}
+
 /* --- Customers empty state --- */
 QLabel#customersEmptyTitle {{
-    color: {NAVY};
+    color: #0F172A;
     font-size: 15px;
     font-weight: 700;
 }}
 QLabel#customersEmptySub {{
-    color: {TEXT_MUTED};
+    color: #64748B;
     font-size: 12px;
 }}
+
 
 
 /* ================================================================
@@ -1673,4 +1851,101 @@ QFrame#glassSection {{
     border: 1px solid rgba(200, 210, 230, 0.5);
     border-radius: 14px;
 }}
+
+/* ================================================================
+   Reports & GST Analytics Hub
+   ================================================================ */
+QFrame#reportKpiCard {{
+    background: #FFFFFF;
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    padding: 10px 14px;
+}}
+QFrame#reportKpiCard:hover {{
+    border-color: #CBD5E1;
+    background: #F8FAFC;
+}}
+QLabel#reportKpiTitle {{
+    font-size: 11px;
+    font-weight: 700;
+    color: #64748B;
+    letter-spacing: 0.5px;
+}}
+QLabel#reportKpiValue {{
+    font-size: 19px;
+    font-weight: 800;
+    color: #0F172A;
+}}
+QLabel#reportKpiSub {{
+    font-size: 11px;
+    font-weight: 500;
+    color: #94A3B8;
+}}
+
+/* Segmented Report Tabs */
+QTabWidget#reportTabs::pane {{
+    border: 1px solid #E2E8F0;
+    border-radius: 12px;
+    background: #FFFFFF;
+    top: 4px;
+}}
+QTabBar#reportTabBar::tab {{
+    background: #F1F5F9;
+    color: #475569;
+    padding: 10px 20px;
+    margin-right: 6px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    border: 1px solid #E2E8F0;
+    border-bottom: none;
+}}
+QTabBar#reportTabBar::tab:selected {{
+    background: #FFFFFF;
+    color: #1E3A8A;
+    border: 1px solid #CBD5E1;
+    border-bottom: 3px solid #2563EB;
+    font-weight: 700;
+}}
+QTabBar#reportTabBar::tab:hover:!selected {{
+    background: #E2E8F0;
+    color: #0F172A;
+}}
+
+/* Mini Tax KPI Pills */
+QFrame#reportTaxPill {{
+    background: #F8FAFC;
+    border: 1px solid #E2E8F0;
+    border-radius: 8px;
+    padding: 6px 12px;
+}}
+QLabel#reportTaxPillVal {{
+    font-size: 13px;
+    font-weight: 700;
+    color: #0F172A;
+}}
+QLabel#reportTaxPillLbl {{
+    font-size: 10px;
+    font-weight: 600;
+    color: #64748B;
+    text-transform: uppercase;
+}}
+
+/* Distribution Progress Bar */
+QProgressBar#reportAreaProgress {{
+    border: 1px solid #E2E8F0;
+    border-radius: 5px;
+    text-align: center;
+    background: #F1F5F9;
+    height: 14px;
+    font-size: 10px;
+    font-weight: 700;
+    color: #0F172A;
+}}
+QProgressBar#reportAreaProgress::chunk {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3B82F6, stop:1 #2563EB);
+    border-radius: 4px;
+}}
 """
+
