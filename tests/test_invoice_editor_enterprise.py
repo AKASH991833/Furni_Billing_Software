@@ -141,3 +141,42 @@ class TestInvoiceEditorEnterprise:
 
         # Advance field is reset to 0 after being committed
         assert editor.f_adv_amount.value() == 0.0
+
+    def test_new_invoice_starts_clean_without_prepopulated_areas(self, db):
+        """A new invoice should not pre-populate standard areas. It should start empty."""
+        editor = InvoiceEditor()
+        # Should have 0 items by default
+        assert len(editor.current_items()) == 0
+        assert len(editor._sections) == 0
+
+        # User explicitly selects an area, e.g. "BEDROOM"
+        editor._add_item_to_area("BEDROOM")
+        assert len(editor.current_items()) == 1
+        assert editor.current_items()[0]["area"] == "BEDROOM"
+        assert len(editor._sections) == 1
+
+        # User adds another item in "KITCHEN"
+        editor._add_item_to_area("KITCHEN")
+        assert len(editor.current_items()) == 2
+        areas = [it["area"] for it in editor.current_items()]
+        assert areas == ["BEDROOM", "KITCHEN"]
+        assert len(editor._sections) == 2
+
+    def test_delete_entire_area(self, db, monkeypatch):
+        """Deleting an entire area removes all items belonging to that area."""
+        editor = InvoiceEditor()
+        editor._add_item_to_area("LIVING ROOM")
+        editor._add_item_to_area("LIVING ROOM")
+        editor._add_item_to_area("BEDROOM")
+        assert len(editor.current_items()) == 3
+
+        # Simulate user confirming the deletion
+        from PySide6.QtWidgets import QMessageBox
+        monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.Yes)
+
+        editor._delete_entire_area("LIVING ROOM")
+        items = editor.current_items()
+        assert len(items) == 1
+        assert items[0]["area"] == "BEDROOM"
+        assert len(editor._sections) == 1
+

@@ -1,15 +1,13 @@
 @echo off
-rem Build the Furniture Bill desktop app into dist/FurnitureBill/
+rem Master Production Build & Installer Script for Furniture Bill
 cd /d "%~dp0"
-
-pyinstaller --clean --noconfirm FurnitureBill.spec
-
+python build_release.py
 if errorlevel 1 (
-    echo BUILD FAILED
+    echo.
+    echo =======================================================
+    echo BUILD FAILED! Check error messages above.
+    echo =======================================================
+    pause
     exit /b 1
 )
-
-echo.
-echo Build complete: dist\FurnitureBill\FurnitureBill.exe
-echo Share the dist\FurnitureBill folder with your customer.
 pause

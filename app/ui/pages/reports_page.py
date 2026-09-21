@@ -1087,167 +1087,87 @@ class ReportsPage(BasePage):
     # CSV Export Implementations
     # -------------------------------------------------------------------------
     def _export_gstr1_csv(self):
-        """Export comprehensive GSTR-1 tax register to CSV."""
+        """Export comprehensive GSTR-1 tax register to Excel/CSV."""
         rows = self._gst_data.get("rows", [])
         if not rows:
             show_toast(self, "No invoice records found for this period.", "warning")
             return
 
+        from app.utils.excel_exporter import export_gstr1_to_excel
         path, _ = QFileDialog.getSaveFileName(
             self, "Export GSTR-1 Tax Register",
-            os.path.expanduser("~/GSTR1_Tax_Register.csv"),
-            "CSV Files (*.csv)",
+            os.path.expanduser("~/GSTR1_Tax_Register.xlsx"),
+            "Excel Workbook (*.xlsx);;CSV Files (*.csv)",
         )
         if not path:
             return
-        if not path.lower().endswith(".csv"):
-            path += ".csv"
 
         try:
-            headers = [
-                "Invoice Number", "Invoice Date", "Customer Name", "Mobile",
-                "Customer GSTIN", "Place of Supply", "Invoice Type",
-                "Taxable Value (INR)", "GST Rate (%)", "CGST Amount (INR)",
-                "SGST Amount (INR)", "IGST Amount (INR)", "Invoice Grand Total (INR)",
-                "Paid Amount (INR)", "Balance Due (INR)", "Status"
-            ]
-            export_rows = []
-            for r in rows:
-                export_rows.append([
-                    r["invoice_number"],
-                    r["date"].strftime("%d-%b-%Y") if r["date"] else "",
-                    r["customer_name"],
-                    r["customer_mobile"],
-                    r["customer_gstin"],
-                    r["customer_state"],
-                    "B2B" if r["is_b2b"] else "B2C",
-                    f"{r['taxable_value']:.2f}",
-                    f"{r['gst_rate']:.0f}%",
-                    f"{r['cgst']:.2f}",
-                    f"{r['sgst']:.2f}",
-                    f"{r['igst']:.2f}",
-                    f"{r['grand_total']:.2f}",
-                    f"{r['paid_amount']:.2f}",
-                    f"{r['balance']:.2f}",
-                    r["status"],
-                ])
-
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-                writer.writerows(export_rows)
-
-            show_toast(self, f"Exported {len(export_rows)} GSTR-1 entries to {os.path.basename(path)}", "success")
+            export_gstr1_to_excel(path, rows)
+            show_toast(self, f"Exported {len(rows)} GSTR-1 entries to {os.path.basename(path)}", "success")
         except Exception as e:  # noqa: BLE001
             show_toast(self, f"Export failed: {e}", "error")
 
     def _export_areas_csv(self):
-        """Export furniture room and category sales distribution to CSV."""
+        """Export furniture room and category sales distribution to Excel/CSV with Chart."""
         if not self._areas_data:
             show_toast(self, "No furniture area sales found for this period.", "warning")
             return
 
+        from app.utils.excel_exporter import export_areas_to_excel
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Furniture Sales by Area",
-            os.path.expanduser("~/Furniture_Sales_By_Area.csv"),
-            "CSV Files (*.csv)",
+            os.path.expanduser("~/Furniture_Sales_By_Area.xlsx"),
+            "Excel Workbook (*.xlsx);;CSV Files (*.csv)",
         )
         if not path:
             return
-        if not path.lower().endswith(".csv"):
-            path += ".csv"
 
         try:
-            headers = ["Furniture Category / Room Area", "Items Volume", "Revenue (INR)", "Revenue Share (%)"]
-            export_rows = [
-                [a["area"], a["item_count"], f"{a['revenue']:.2f}", f"{a['percent']:.1f}%"]
-                for a in self._areas_data
-            ]
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-                writer.writerows(export_rows)
-
-            show_toast(self, f"Exported {len(export_rows)} room areas to {os.path.basename(path)}", "success")
+            export_areas_to_excel(path, self._areas_data)
+            show_toast(self, f"Exported {len(self._areas_data)} room areas with chart to {os.path.basename(path)}", "success")
         except Exception as e:  # noqa: BLE001
             show_toast(self, f"Export failed: {e}", "error")
 
     def _export_customers_csv(self):
-        """Export top customer receivables and totals to CSV."""
+        """Export top customer receivables and totals to Excel/CSV with Bar Chart."""
         if not self._customers_data:
             show_toast(self, "No customer data found for this period.", "warning")
             return
 
+        from app.utils.excel_exporter import export_receivables_to_excel
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Client Receivables",
-            os.path.expanduser("~/Customer_Receivables.csv"),
-            "CSV Files (*.csv)",
+            os.path.expanduser("~/Customer_Receivables.xlsx"),
+            "Excel Workbook (*.xlsx);;CSV Files (*.csv)",
         )
         if not path:
             return
-        if not path.lower().endswith(".csv"):
-            path += ".csv"
 
         try:
-            headers = [
-                "Customer Name", "Contact Mobile", "GSTIN", "City",
-                "Invoices Count", "Total Billed (INR)", "Total Paid (INR)",
-                "Balance Due (INR)", "Settlement %"
-            ]
-            export_rows = [
-                [
-                    c["name"], c["mobile"], c["gstin"], c["city"],
-                    c["invoices_count"], f"{c['total_billed']:.2f}",
-                    f"{c['total_paid']:.2f}", f"{c['balance_due']:.2f}",
-                    f"{c['compliance_pct']:.1f}%"
-                ]
-                for c in self._customers_data
-            ]
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-                writer.writerows(export_rows)
-
-            show_toast(self, f"Exported {len(export_rows)} customer ledgers to {os.path.basename(path)}", "success")
+            export_receivables_to_excel(path, self._customers_data)
+            show_toast(self, f"Exported {len(self._customers_data)} customer accounts with chart to {os.path.basename(path)}", "success")
         except Exception as e:  # noqa: BLE001
             show_toast(self, f"Export failed: {e}", "error")
 
     def _export_payments_csv(self):
-        """Export payment history ledger to CSV."""
+        """Export payment history ledger to Excel/CSV."""
         if not self._payments_data:
             show_toast(self, "No payment records found for this period.", "warning")
             return
 
+        from app.utils.excel_exporter import export_payments_to_excel
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Payment History",
-            os.path.expanduser("~/Payment_History_Ledger.csv"),
-            "CSV Files (*.csv)",
+            os.path.expanduser("~/Payment_History_Ledger.xlsx"),
+            "Excel Workbook (*.xlsx);;CSV Files (*.csv)",
         )
         if not path:
             return
-        if not path.lower().endswith(".csv"):
-            path += ".csv"
 
         try:
-            headers = ["Payment Date", "Invoice Number", "Customer Name", "Contact Mobile", "Payment Mode", "Reference / UTR", "Amount (INR)", "Notes"]
-            export_rows = [
-                [
-                    p["date"].strftime("%d-%b-%Y") if p["date"] else "",
-                    p["invoice_number"],
-                    p["customer_name"],
-                    p.get("customer_mobile", "-"),
-                    p["mode"],
-                    p["reference"],
-                    f"{p['amount']:.2f}",
-                    p.get("notes", "")
-                ]
-                for p in self._payments_data
-            ]
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-                writer.writerows(export_rows)
-
-            show_toast(self, f"Exported {len(export_rows)} payments to {os.path.basename(path)}", "success")
+            export_payments_to_excel(path, self._payments_data)
+            show_toast(self, f"Exported {len(self._payments_data)} payments to {os.path.basename(path)}", "success")
         except Exception as e:  # noqa: BLE001
             show_toast(self, f"Export failed: {e}", "error")
+

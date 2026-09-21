@@ -440,3 +440,117 @@ def test_attendance_entry_dialog_workflow(db):
     assert data["advance_notes"] == "Grocery advance"
     assert data["travel_notes"] == "Auto fare"
 
+
+def test_payment_done_cycle_and_voucher_workflow(db):
+    """Verify Payment Done cycle accounting, voucher generation, cutoff date, and rollback."""
+    w = worker_service.create_worker("Raju Mistri", daily_rate=500.0, work_type="Mistri")
+
+    # 1. Add 7 days of attendance (Sep 1 - Sep 7) = 7.0 days * 500 = ₹3,500
+    for day_num in range(1, 8):
+        worker_service.record_daily_attendance(w.id, date(2026, 9, day_num), multiplier=1.0)
+
+    # 2. Add advance on Sep 3 = ₹1,000, travel on Sep 5 = ₹200
+    worker_service.record_advance(w.id, date(2026, 9, 3), amount=1000.0, payment_method="Cash")
+    worker_service.record_travel_expense(w.id, date(2026, 9, 5), amount=200.0, category="Auto")
+
+    # Cycle up to Sep 7: Net = 3500 + 200 - 1000 = 2700
+    cycle_before = worker_service.get_worker_active_cycle(w.id, up_to_date=date(2026, 9, 7))
+    assert cycle_before["total_units"] == 7.0
+    assert cycle_before["total_work_earning"] == 3500.0
+    assert cycle_before["total_travel"] == 200.0
+    assert cycle_before["total_advances"] == 1000.0
+    assert cycle_before["net_payable"] == 2700.0
+
+    # 3. Perform Full Payment Done up to Sep 7
+    st = worker_service.record_full_payment_done(
+        worker_id=w.id,
+        end_date=date(2026, 9, 7),
+        paid_amount=2700.0,
+        payment_method="UPI",
+        notes="Full payment done up to 07 Sep",
+    )
+    assert st.voucher_no.startswith("PAY-2026-")
+    assert st.is_settled is True
+    assert st.end_date == date(2026, 9, 7)
+
+    # Verify last settled date
+    last_d = worker_service.get_worker_last_settled_date(w.id)
+    assert last_d == date(2026, 9, 7)
+
+    # 4. Now add work in the NEW cycle (Sep 8, 9, 10) = 3 days * 500 = ₹1,500
+    for day_num in range(8, 11):
+        worker_service.record_daily_attendance(w.id, date(2026, 9, day_num), multiplier=1.0)
+    worker_service.record_advance(w.id, date(2026, 9, 9), amount=400.0, payment_method="Cash")
+
+    # 5. Check active cycle: starts on Sep 8! Old days (Sep 1-7) are NOT double counted!
+    cycle_new = worker_service.get_worker_active_cycle(w.id, up_to_date=date(2026, 9, 10))
+    assert cycle_new["start_date"] == date(2026, 9, 8)
+    assert cycle_new["end_date"] == date(2026, 9, 10)
+    assert cycle_new["total_units"] == 3.0
+    assert cycle_new["total_work_earning"] == 1500.0
+    assert cycle_new["total_advances"] == 400.0
+    assert cycle_new["net_payable"] == 1100.0
+
+    # 6. Verify Payment Done ledger record
+    pdone_records = worker_service.get_all_payment_done_records(worker_id=w.id)
+    assert len(pdone_records) == 1
+    rec = pdone_records[0]
+    assert rec["voucher_no"] == st.voucher_no
+    assert rec["paid_amount"] == 2700.0
+    assert rec["payment_method"] == "UPI"
+    assert "07 Sep 2026" in rec["period_label"]
+
+    # 7. Verify WhatsApp payment receipt generator
+    wa_msg = worker_service.generate_payment_done_whatsapp_text(st.id, business_name="WOOD CRAFT")
+    assert st.voucher_no in wa_msg
+    assert "Raju Mistri" in wa_msg
+    assert "₹2,700.00" in wa_msg
+
+    # 8. Rollback payment: reopens the Sep 1-7 period into active cycle!
+    ok = worker_service.rollback_payment_done(st.id)
+    assert ok is True
+    assert worker_service.get_worker_last_settled_date(w.id) is None
+
+    # After rollback, full cycle (Sep 1 - Sep 10) is active (10 days = ₹5,000)!
+    cycle_reopened = worker_service.get_worker_active_cycle(w.id, up_to_date=date(2026, 9, 10))
+    assert cycle_reopened["total_units"] == 10.0
+    assert cycle_reopened["total_work_earning"] == 5000.0
+    assert cycle_reopened["total_advances"] == 1400.0  # 1000 + 400
+
+
+def test_workers_page_payment_done_tab_and_ui(db):
+    """Verify WorkersPage has the Payment Done tab and correct UI components."""
+    from PySide6.QtWidgets import QApplication
+    _app = QApplication.instance() or QApplication([])
+    from app.ui.pages.workers_page import WorkersPage, SettlementDialog
+
+    page = WorkersPage()
+    assert page.tabs.count() == 5
+    assert page.tabs.tabText(0) == "👥 Worker List"
+    assert page.tabs.tabText(1) == "⚡ Daily Attendance"
+    assert page.tabs.tabText(2) == "📋 Monthly History"
+    assert page.tabs.tabText(3) == "💵 Payments && Settlement"
+    assert page.tabs.tabText(4) == "✅ Payment Done"
+
+    # Verify table_pdone
+    assert hasattr(page, "table_pdone")
+    assert page.table_pdone.columnCount() == 12
+    pdone_headers = [page.table_pdone.horizontalHeaderItem(c).text() for c in range(12)]
+    assert "VOUCHER #" in pdone_headers
+    assert "WORKER NAME" in pdone_headers
+    assert "SETTLED PERIOD" in pdone_headers
+    assert "NET PAID" in pdone_headers
+    assert "ACTIONS" in pdone_headers
+
+    # Verify SettlementDialog with worker_id
+    w = worker_service.create_worker("Kamlesh", daily_rate=600.0)
+    worker_service.record_daily_attendance(w.id, date(2026, 9, 1), multiplier=1.0)
+    dlg = SettlementDialog(page, summary={"name": "Kamlesh", "worker_id": w.id, "year": 2026, "month": 9}, worker_id=w.id)
+    assert hasattr(dlg, "f_end_date")
+    assert dlg.f_amount.value() == 600.0
+    dlg._save()
+    data = dlg.get_data()
+    assert data["paid_amount"] == 600.0
+    assert data["end_date"] is not None
+
+

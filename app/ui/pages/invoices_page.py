@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.services import invoice_service
+from app.services import invoice_service, payment_service
 from app.services.invoice_service import compute_status, get_invoice_status
 from app.ui.pages.base_page import BasePage
 from app.ui.pages.invoice_editor import InvoiceEditor
@@ -152,7 +152,7 @@ class InvoicesPage(BasePage):
         self.status_filter.setVisible(False)
         self.status_filter.currentTextChanged.connect(self._search)
 
-        btn_export = QPushButton("\uD83D\uDCE5 Export CSV")
+        btn_export = QPushButton("📊 Export Excel")
         btn_export.setObjectName("invoiceExportBtn")
         btn_export.setCursor(Qt.PointingHandCursor)
         btn_export.clicked.connect(self._export_csv)
@@ -190,7 +190,7 @@ class InvoicesPage(BasePage):
         hh.setSectionResizeMode(5, QHeaderView.Interactive)  # Due
         hh.setSectionResizeMode(6, QHeaderView.Interactive)  # Actions
 
-        self.table.setColumnWidth(0, 190)
+        self.table.setColumnWidth(0, 230)
         self.table.setColumnWidth(2, 120)
         self.table.setColumnWidth(3, 135)
         self.table.setColumnWidth(4, 130)
@@ -199,6 +199,8 @@ class InvoicesPage(BasePage):
 
         self.table.cellDoubleClicked.connect(lambda r, c: self._edit_row(r))
         self.table.itemSelectionChanged.connect(self._selection_changed)
+        self.table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._table_context_menu)
 
         self.empty_label = QLabel("No invoices found. Click '+ New Invoice' to create one.")
         self.empty_label.setObjectName("invoiceEmptyTitle")
@@ -305,7 +307,7 @@ class InvoicesPage(BasePage):
         b.setCursor(Qt.PointingHandCursor)
         b.setToolTip(tip)
         b.setStyleSheet(
-            f"QPushButton {{ background: {bg}; border: 1px solid {border}; border-radius: 5px; color: {color}; font-size: 12px; font-weight: 700; padding: 0; min-width: 28px; max-width: 28px; min-height: 28px; max-height: 28px; }}"
+            f"QPushButton {{ background: {bg}; border: 1px solid {border}; border-radius: 6px; color: {color}; font-size: 13px; font-weight: 700; padding: 0; min-width: 30px; max-width: 30px; min-height: 30px; max-height: 30px; }}"
             f"QPushButton:hover {{ background: {hover_bg}; border-color: #94A3B8; }}"
             f"QPushButton:disabled {{ background: #F8FAFC; border-color: #E2E8F0; color: #CBD5E1; }}"
         )
@@ -368,130 +370,131 @@ class InvoicesPage(BasePage):
             display_rows.append((inv, total, paid, outstanding, st))
 
         self._cleanup_table_widgets()
-        self.table.setRowCount(0)
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(len(display_rows))
 
-        for inv, total, paid, outstanding, st in display_rows:
-            r = self.table.rowCount()
-            self.table.insertRow(r)
+        try:
+            for r, (inv, total, paid, outstanding, st) in enumerate(display_rows):
+                # Col 0: Invoice No
+                it_no = QTableWidgetItem(inv.invoice_number or "")
+                it_no.setData(Qt.UserRole, inv.id)
+                it_no.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                it_no.setForeground(Qt.GlobalColor.darkBlue)
+                self.table.setItem(r, 0, it_no)
 
-            # Col 0: Invoice No
-            it_no = QTableWidgetItem(inv.invoice_number or "")
-            it_no.setData(Qt.UserRole, inv.id)
-            it_no.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-            it_no.setForeground(Qt.GlobalColor.darkBlue)
-            self.table.setItem(r, 0, it_no)
+                # Col 1: Customer & Mobile (2-line widget)
+                cust_name = inv.customer.name if inv.customer else "—"
+                cust_mob = inv.customer.mobile if (inv.customer and inv.customer.mobile) else ""
+                w_cust = QWidget()
+                lay_cust = QVBoxLayout(w_cust)
+                lay_cust.setContentsMargins(8, 2, 8, 2)
+                lay_cust.setSpacing(1)
+                lbl_name = QLabel(cust_name)
+                lbl_name.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 12px;")
+                lbl_mob = QLabel(f"\u260E {cust_mob}" if cust_mob else "No mobile saved")
+                lbl_mob.setStyleSheet("color: #64748B; font-size: 10px;")
+                lay_cust.addWidget(lbl_name)
+                lay_cust.addWidget(lbl_mob)
+                it_cust = QTableWidgetItem("")
+                it_cust.setData(Qt.UserRole, inv.id)
+                self.table.setItem(r, 1, it_cust)
+                self.table.setCellWidget(r, 1, w_cust)
 
-            # Col 1: Customer & Mobile (2-line widget)
-            cust_name = inv.customer.name if inv.customer else "—"
-            cust_mob = inv.customer.mobile if (inv.customer and inv.customer.mobile) else ""
-            w_cust = QWidget()
-            lay_cust = QVBoxLayout(w_cust)
-            lay_cust.setContentsMargins(8, 2, 8, 2)
-            lay_cust.setSpacing(1)
-            lbl_name = QLabel(cust_name)
-            lbl_name.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 12px;")
-            lbl_mob = QLabel(f"\u260E {cust_mob}" if cust_mob else "No mobile saved")
-            lbl_mob.setStyleSheet("color: #64748B; font-size: 10px;")
-            lay_cust.addWidget(lbl_name)
-            lay_cust.addWidget(lbl_mob)
-            it_cust = QTableWidgetItem("")
-            it_cust.setData(Qt.UserRole, inv.id)
-            self.table.setItem(r, 1, it_cust)
-            self.table.setCellWidget(r, 1, w_cust)
+                # Col 2: Date & Due Date (2-line widget)
+                inv_date_str = inv.invoice_date.strftime("%d-%b-%Y") if inv.invoice_date else "—"
+                due_date_str = inv.due_date.strftime("%d-%b-%Y") if inv.due_date else ""
+                w_date = QWidget()
+                lay_date = QVBoxLayout(w_date)
+                lay_date.setContentsMargins(6, 2, 6, 2)
+                lay_date.setSpacing(1)
+                lbl_idate = QLabel(inv_date_str)
+                lbl_idate.setStyleSheet("font-weight: 600; color: #0F172A; font-size: 11px;")
+                lbl_due = QLabel(f"Due: {due_date_str}" if due_date_str else "Immediate")
+                lbl_due.setStyleSheet("color: #94A3B8; font-size: 10px;")
+                lay_date.addWidget(lbl_idate)
+                lay_date.addWidget(lbl_due)
+                it_date = QTableWidgetItem("")
+                it_date.setData(Qt.UserRole, inv.id)
+                self.table.setItem(r, 2, it_date)
+                self.table.setCellWidget(r, 2, w_date)
 
-            # Col 2: Date & Due Date (2-line widget)
-            inv_date_str = inv.invoice_date.strftime("%d-%b-%Y") if inv.invoice_date else "—"
-            due_date_str = inv.due_date.strftime("%d-%b-%Y") if inv.due_date else ""
-            w_date = QWidget()
-            lay_date = QVBoxLayout(w_date)
-            lay_date.setContentsMargins(6, 2, 6, 2)
-            lay_date.setSpacing(1)
-            lbl_idate = QLabel(inv_date_str)
-            lbl_idate.setStyleSheet("font-weight: 600; color: #0F172A; font-size: 11px;")
-            lbl_due = QLabel(f"Due: {due_date_str}" if due_date_str else "Immediate")
-            lbl_due.setStyleSheet("color: #94A3B8; font-size: 10px;")
-            lay_date.addWidget(lbl_idate)
-            lay_date.addWidget(lbl_due)
-            it_date = QTableWidgetItem("")
-            it_date.setData(Qt.UserRole, inv.id)
-            self.table.setItem(r, 2, it_date)
-            self.table.setCellWidget(r, 2, w_date)
+                # Col 3: Status Badge
+                w_st = QWidget()
+                lay_st = QHBoxLayout(w_st)
+                lay_st.setContentsMargins(4, 2, 4, 2)
+                lay_st.setAlignment(Qt.AlignCenter)
+                badge = QLabel(st)
+                badge.setAlignment(Qt.AlignCenter)
 
-            # Col 3: Status Badge
-            w_st = QWidget()
-            lay_st = QHBoxLayout(w_st)
-            lay_st.setContentsMargins(4, 2, 4, 2)
-            lay_st.setAlignment(Qt.AlignCenter)
-            badge = QLabel(st)
-            badge.setAlignment(Qt.AlignCenter)
+                if st == "PAID":
+                    badge_style = "background: #ECFDF5; color: #059669; border: 1px solid #A7F3D0;"
+                elif st == "PARTIALLY PAID":
+                    badge_style = "background: #FFFBEB; color: #D97706; border: 1px solid #FDE68A;"
+                elif st == "OVERDUE":
+                    badge_style = "background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA;"
+                elif st == "UNPAID":
+                    badge_style = "background: #EFF6FF; color: #2563EB; border: 1px solid #BFDBFE;"
+                else:
+                    badge_style = "background: #F1F5F9; color: #475569; border: 1px solid #CBD5E1;"
 
-            if st == "PAID":
-                badge_style = "background: #ECFDF5; color: #059669; border: 1px solid #A7F3D0;"
-            elif st == "PARTIALLY PAID":
-                badge_style = "background: #FFFBEB; color: #D97706; border: 1px solid #FDE68A;"
-            elif st == "OVERDUE":
-                badge_style = "background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA;"
-            elif st == "UNPAID":
-                badge_style = "background: #EFF6FF; color: #2563EB; border: 1px solid #BFDBFE;"
-            else:
-                badge_style = "background: #F1F5F9; color: #475569; border: 1px solid #CBD5E1;"
+                badge.setStyleSheet(f"{badge_style} border-radius: 10px; font-weight: 700; font-size: 10px; padding: 3px 10px;")
+                lay_st.addWidget(badge)
+                it_st = QTableWidgetItem("")
+                it_st.setData(Qt.UserRole, inv.id)
+                self.table.setItem(r, 3, it_st)
+                self.table.setCellWidget(r, 3, w_st)
 
-            badge.setStyleSheet(f"{badge_style} border-radius: 10px; font-weight: 700; font-size: 10px; padding: 3px 10px;")
-            lay_st.addWidget(badge)
-            it_st = QTableWidgetItem("")
-            it_st.setData(Qt.UserRole, inv.id)
-            self.table.setItem(r, 3, it_st)
-            self.table.setCellWidget(r, 3, w_st)
+                # Col 4: Amount
+                it_amt = QTableWidgetItem(_money(total))
+                it_amt.setData(Qt.UserRole, inv.id)
+                it_amt.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                it_amt.setForeground(Qt.GlobalColor.black)
+                self.table.setItem(r, 4, it_amt)
 
-            # Col 4: Amount
-            it_amt = QTableWidgetItem(_money(total))
-            it_amt.setData(Qt.UserRole, inv.id)
-            it_amt.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
-            it_amt.setForeground(Qt.GlobalColor.black)
-            self.table.setItem(r, 4, it_amt)
+                # Col 5: Balance Due
+                it_due = QTableWidgetItem(_money(outstanding))
+                it_due.setData(Qt.UserRole, inv.id)
+                it_due.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                if outstanding > 0:
+                    it_due.setForeground(Qt.GlobalColor.darkRed)
+                else:
+                    it_due.setForeground(Qt.GlobalColor.darkGreen)
+                self.table.setItem(r, 5, it_due)
 
-            # Col 5: Balance Due
-            it_due = QTableWidgetItem(_money(outstanding))
-            it_due.setData(Qt.UserRole, inv.id)
-            it_due.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
-            if outstanding > 0:
-                it_due.setForeground(Qt.GlobalColor.darkRed)
-            else:
-                it_due.setForeground(Qt.GlobalColor.darkGreen)
-            self.table.setItem(r, 5, it_due)
+                # Col 6: Row Action Buttons
+                w_act = QWidget()
+                lay_act = QHBoxLayout(w_act)
+                lay_act.setContentsMargins(4, 2, 4, 2)
+                lay_act.setSpacing(4)
+                lay_act.setAlignment(Qt.AlignCenter)
 
-            # Col 6: Row Action Buttons
-            w_act = QWidget()
-            lay_act = QHBoxLayout(w_act)
-            lay_act.setContentsMargins(4, 2, 4, 2)
-            lay_act.setSpacing(4)
-            lay_act.setAlignment(Qt.AlignCenter)
+                btn_prev = self._row_btn("\uD83D\uDCC4", "Preview & Print PDF", "#EFF6FF", "#BFDBFE", "#1D4ED8", "#DBEAFE")
+                btn_prev.clicked.connect(lambda _, id=inv.id: self._preview_pdf_by_id(id))
 
-            btn_prev = self._row_btn("\uD83D\uDCC4", "Preview & Print PDF", "#EFF6FF", "#BFDBFE", "#1D4ED8", "#DBEAFE")
-            btn_prev.clicked.connect(lambda _, id=inv.id: self._preview_pdf_by_id(id))
+                btn_wa = self._row_btn("\uD83D\uDCAC", "Share on WhatsApp", "#ECFDF5", "#A7F3D0", "#047857", "#D1FAE5")
+                btn_wa.clicked.connect(lambda _, id=inv.id: self._whatsapp_by_id(id))
+                btn_wa.setEnabled(bool(inv.customer and inv.customer.mobile))
 
-            btn_wa = self._row_btn("\uD83D\uDCAC", "Share on WhatsApp", "#ECFDF5", "#A7F3D0", "#047857", "#D1FAE5")
-            btn_wa.clicked.connect(lambda _, id=inv.id: self._whatsapp_by_id(id))
-            btn_wa.setEnabled(bool(inv.customer and inv.customer.mobile))
+                btn_pay = self._row_btn("\u20B9", "Record Payment", "#FFFBEB", "#FDE68A", "#B45309", "#FEF3C7")
+                btn_pay.clicked.connect(lambda _, id=inv.id: self._payments_by_id(id))
 
-            btn_pay = self._row_btn("\u20B9", "Record Payment", "#FFFBEB", "#FDE68A", "#B45309", "#FEF3C7")
-            btn_pay.clicked.connect(lambda _, id=inv.id: self._payments_by_id(id))
+                btn_edit = self._row_btn("\u270E", "Edit Invoice", "#F1F5F9", "#CBD5E1", "#1E293B", "#E2E8F0")
+                btn_edit.clicked.connect(lambda _, id=inv.id: self._edit_row_by_id(id))
 
-            btn_edit = self._row_btn("\u270E", "Edit Invoice", "#F1F5F9", "#CBD5E1", "#1E293B", "#E2E8F0")
-            btn_edit.clicked.connect(lambda _, id=inv.id: self._edit_row_by_id(id))
+                btn_del = self._row_btn("\uD83D\uDDD1", "Delete Invoice", "#FEF2F2", "#FECACA", "#B91C1C", "#FEE2E2")
+                btn_del.clicked.connect(lambda _, id=inv.id, no=inv.invoice_number: self._confirm_delete(id, no))
 
-            btn_del = self._row_btn("\uD83D\uDDD1", "Delete Invoice", "#FEF2F2", "#FECACA", "#B91C1C", "#FEE2E2")
-            btn_del.clicked.connect(lambda _, id=inv.id, no=inv.invoice_number: self._confirm_delete(id, no))
-
-            lay_act.addWidget(btn_prev)
-            lay_act.addWidget(btn_wa)
-            lay_act.addWidget(btn_pay)
-            lay_act.addWidget(btn_edit)
-            lay_act.addWidget(btn_del)
-            it_act = QTableWidgetItem("")
-            it_act.setData(Qt.UserRole, inv.id)
-            self.table.setItem(r, 6, it_act)
-            self.table.setCellWidget(r, 6, w_act)
+                lay_act.addWidget(btn_prev)
+                lay_act.addWidget(btn_wa)
+                lay_act.addWidget(btn_pay)
+                lay_act.addWidget(btn_edit)
+                lay_act.addWidget(btn_del)
+                it_act = QTableWidgetItem("")
+                it_act.setData(Qt.UserRole, inv.id)
+                self.table.setItem(r, 6, it_act)
+                self.table.setCellWidget(r, 6, w_act)
+        finally:
+            self.table.setUpdatesEnabled(True)
 
         has_rows = len(display_rows) > 0
         self.table.setVisible(has_rows)
@@ -533,11 +536,82 @@ class InvoicesPage(BasePage):
         if inv:
             self._open_editor(invoice=inv)
 
+    def _table_context_menu(self, pos):
+        row = self.table.rowAt(pos.y())
+        if row < 0:
+            return
+        it = self.table.item(row, 0)
+        if not it:
+            return
+        inv_id = it.data(Qt.UserRole)
+        if not inv_id:
+            return
+        inv = invoice_service.get_invoice(inv_id)
+        if not inv:
+            return
+
+        menu = QMenu(self)
+        s = payment_service.invoice_payment_summary(inv_id)
+        due = round(float(s["outstanding"] or 0), 2)
+        is_saved = (inv.status != "DRAFT")
+
+        act_pay = menu.addAction(f"💳 Record Payment... (Due: \u20B9 {due:,.2f})")
+        act_pay.triggered.connect(lambda: self._payments_by_id(inv_id))
+
+        if is_saved and due > 0.009:
+            act_full = menu.addAction(f"⚡ Mark as Fully Paid (Settle \u20B9 {due:,.2f})")
+            act_full.triggered.connect(lambda: self._quick_settle_full(inv_id, inv.invoice_number, due))
+
+        menu.addSeparator()
+        if is_saved:
+            act_pdf = menu.addAction("📄 Preview & Print PDF")
+            act_pdf.triggered.connect(lambda: self._preview_pdf_by_id(inv_id))
+
+            act_wa = menu.addAction("💬 Share on WhatsApp")
+            act_wa.triggered.connect(lambda: self._whatsapp_by_id(inv_id))
+            act_wa.setEnabled(bool(inv.customer and inv.customer.mobile))
+
+        act_edit = menu.addAction("✎ Edit Invoice")
+        act_edit.triggered.connect(lambda: self._edit_row_by_id(inv_id))
+
+        act_dup = menu.addAction("📋 Duplicate as Draft")
+        act_dup.triggered.connect(lambda: self._duplicate_by_id(inv_id))
+
+        menu.addSeparator()
+        act_del = menu.addAction("🗑️ Delete Invoice")
+        act_del.triggered.connect(lambda: self._confirm_delete(inv_id, inv.invoice_number))
+
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    def _quick_settle_full(self, inv_id, inv_no, due):
+        reply = QMessageBox.question(
+            self,
+            "Confirm Full Settlement",
+            f"Record full payment of \u20B9 {due:,.2f} for Invoice #{inv_no}?\n\nThis will mark the invoice as PAID.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        try:
+            payment_service.settle_invoice_full(inv_id)
+            show_toast(self, f"Invoice #{inv_no} is now FULLY PAID! (\u20B9 {due:,.2f})", "success")
+            self._load()
+            if hasattr(self.main_window, "refresh_all"):
+                self.main_window.refresh_all()
+            elif hasattr(self.main_window, "refresh_current"):
+                self.main_window.refresh_current()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", str(e))
+
     def _duplicate_selected(self):
         if not self._selected_invoice_id:
             return
+        self._duplicate_by_id(self._selected_invoice_id)
+
+    def _duplicate_by_id(self, inv_id):
         try:
-            new_inv = invoice_service.duplicate_invoice(self._selected_invoice_id)
+            new_inv = invoice_service.duplicate_invoice(inv_id)
             show_toast(self, f"Duplicated as new draft: {new_inv.invoice_number}", "success")
             self._load()
             self._open_editor(invoice=new_inv)
@@ -556,7 +630,9 @@ class InvoicesPage(BasePage):
         dlg = PaymentDialog(inv, self)
         dlg.exec()
         self._load()
-        if hasattr(self.main_window, "refresh_current"):
+        if hasattr(self.main_window, "refresh_all"):
+            self.main_window.refresh_all()
+        elif hasattr(self.main_window, "refresh_current"):
             self.main_window.refresh_current()
 
     def _preview_pdf(self):
@@ -624,38 +700,19 @@ class InvoicesPage(BasePage):
                 show_toast(self, "Could not delete invoice.", "error")
 
     def _export_csv(self):
+        from app.utils.excel_exporter import export_invoices_to_excel
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Invoices to CSV", "invoices_export.csv", "CSV Files (*.csv)"
+            self, "Export Invoices", "invoices_export.xlsx", "Excel Workbook (*.xlsx);;CSV Files (*.csv)"
         )
         if not path:
             return
         try:
             invoices = invoice_service.search_invoices(self.search.text().strip(), "", 1000)
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    "Invoice No", "Customer Name", "Mobile", "Date", "Due Date",
-                    "Status", "Grand Total", "Paid Amount", "Outstanding Due"
-                ])
-                for inv in invoices:
-                    total = float(inv.grand_total or 0)
-                    paid = sum(float(p.amount or 0) for p in (inv.payments or []))
-                    due = max(total - paid, 0.0)
-                    st = compute_status(inv.grand_total, paid, inv.status, inv.due_date)
-                    writer.writerow([
-                        inv.invoice_number,
-                        inv.customer.name if inv.customer else "",
-                        inv.customer.mobile if (inv.customer and inv.customer.mobile) else "",
-                        inv.invoice_date.strftime("%Y-%m-%d") if inv.invoice_date else "",
-                        inv.due_date.strftime("%Y-%m-%d") if inv.due_date else "",
-                        st,
-                        f"{total:.2f}",
-                        f"{paid:.2f}",
-                        f"{due:.2f}",
-                    ])
-            show_toast(self, f"Exported {len(invoices)} invoices to CSV.", "success")
+            export_invoices_to_excel(path, invoices)
+            show_toast(self, f"Exported {len(invoices)} invoices to {os.path.basename(path)}.", "success")
         except Exception as e:
             show_toast(self, f"Export failed: {e}", "error")
+
 
     @staticmethod
     def _ensure_pdf_engine():

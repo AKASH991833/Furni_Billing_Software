@@ -280,7 +280,7 @@ class CustomersPage(BasePage):
         btn_add.clicked.connect(self._add_customer)
         row.addWidget(btn_add)
 
-        btn_export = QPushButton(" 📥 Export CSV ")
+        btn_export = QPushButton(" 📊 Export Excel ")
         btn_export.setStyleSheet(
             "QPushButton { background: #F1F5F9; color: #1E293B; font-weight: 600; "
             "border: 1px solid #CBD5E1; border-radius: 7px; padding: 7px 13px; font-size: 12px; } "
@@ -663,75 +663,77 @@ class CustomersPage(BasePage):
                 continue
             filtered.append(c)
 
-        self.table.setRowCount(0)
-        for r_idx, c in enumerate(filtered):
-            self.table.insertRow(r_idx)
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(len(filtered))
+        try:
+            for r_idx, c in enumerate(filtered):
+                # Col 0: Name & City
+                name_text = c["name"]
+                sub_text = f"  ({c['city']})" if c["city"] != "-" else ""
+                it0 = QTableWidgetItem(f"{name_text}{sub_text}")
+                it0.setFont(QFont("Segoe UI", 9, QFont.Bold))
+                it0.setForeground(QColor("#0F172A"))
+                it0.setData(Qt.UserRole, c["id"])
+                self.table.setItem(r_idx, 0, it0)
 
-            # Col 0: Name & City
-            name_text = c["name"]
-            sub_text = f"  ({c['city']})" if c["city"] != "-" else ""
-            it0 = QTableWidgetItem(f"{name_text}{sub_text}")
-            it0.setFont(QFont("Segoe UI", 9, QFont.Bold))
-            it0.setForeground(QColor("#0F172A"))
-            it0.setData(Qt.UserRole, c["id"])
-            self.table.setItem(r_idx, 0, it0)
+                # Col 1: Contact Mobile
+                it1 = QTableWidgetItem(c["mobile"])
+                it1.setForeground(QColor("#475569"))
+                self.table.setItem(r_idx, 1, it1)
 
-            # Col 1: Contact Mobile
-            it1 = QTableWidgetItem(c["mobile"])
-            it1.setForeground(QColor("#475569"))
-            self.table.setItem(r_idx, 1, it1)
+                # Col 2: GSTIN / Category Pill
+                self.table.setItem(r_idx, 2, QTableWidgetItem(""))
+                cat_pill = QLabel(c["gstin"] if c["has_gstin"] else "B2C Consumer")
+                cat_pill.setAlignment(Qt.AlignCenter)
+                if c["has_gstin"]:
+                    cat_pill.setStyleSheet(
+                        "background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; "
+                        "border-radius: 4px; font-weight: 700; font-family: Consolas; font-size: 10px; padding: 2px 6px;"
+                    )
+                else:
+                    cat_pill.setStyleSheet(
+                        "background: #F1F5F9; color: #64748B; border: 1px solid #CBD5E1; "
+                        "border-radius: 4px; font-weight: 600; font-size: 10px; padding: 2px 6px;"
+                    )
+                cw = QWidget()
+                cw.setStyleSheet("background: transparent;")
+                clay = QHBoxLayout(cw)
+                clay.setContentsMargins(4, 8, 4, 8)
+                clay.setAlignment(Qt.AlignCenter)
+                clay.addWidget(cat_pill)
+                self.table.setCellWidget(r_idx, 2, cw)
 
-            # Col 2: GSTIN / Category Pill
-            self.table.setItem(r_idx, 2, QTableWidgetItem(""))
-            cat_pill = QLabel(c["gstin"] if c["has_gstin"] else "B2C Consumer")
-            cat_pill.setAlignment(Qt.AlignCenter)
-            if c["has_gstin"]:
-                cat_pill.setStyleSheet(
-                    "background: #ECFDF5; color: #065F46; border: 1px solid #A7F3D0; "
-                    "border-radius: 4px; font-weight: 700; font-family: Consolas; font-size: 10px; padding: 2px 6px;"
-                )
-            else:
-                cat_pill.setStyleSheet(
-                    "background: #F1F5F9; color: #64748B; border: 1px solid #CBD5E1; "
-                    "border-radius: 4px; font-weight: 600; font-size: 10px; padding: 2px 6px;"
-                )
-            cw = QWidget()
-            cw.setStyleSheet("background: transparent;")
-            clay = QHBoxLayout(cw)
-            clay.setContentsMargins(4, 8, 4, 8)
-            clay.setAlignment(Qt.AlignCenter)
-            clay.addWidget(cat_pill)
-            self.table.setCellWidget(r_idx, 2, cw)
+                # Col 3: Total Billed (₹)
+                it3 = QTableWidgetItem(_money(c["total_invoiced"]))
+                it3.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                it3.setFont(QFont("Segoe UI", 9, QFont.DemiBold))
+                it3.setForeground(QColor("#0F172A"))
+                self.table.setItem(r_idx, 3, it3)
 
-            # Col 3: Total Billed (₹)
-            it3 = QTableWidgetItem(_money(c["total_invoiced"]))
-            it3.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            it3.setFont(QFont("Segoe UI", 9, QFont.DemiBold))
-            it3.setForeground(QColor("#0F172A"))
-            self.table.setItem(r_idx, 3, it3)
-
-            # Col 4: Balance Due (₹) & Status
-            due = c["outstanding"]
-            self.table.setItem(r_idx, 4, QTableWidgetItem(""))
-            due_pill = QLabel(_money(due) if due > 0.01 else "Settled")
-            due_pill.setAlignment(Qt.AlignCenter)
-            if due > 0.01:
-                due_pill.setStyleSheet(
-                    "background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; "
-                    "border-radius: 4px; font-weight: 800; font-size: 10px; padding: 2px 6px;"
-                )
-            else:
-                due_pill.setStyleSheet(
-                    "background: #ECFDF5; color: #059669; border: 1px solid #A7F3D0; "
-                    "border-radius: 4px; font-weight: 700; font-size: 10px; padding: 2px 6px;"
-                )
-            dw = QWidget()
-            dw.setStyleSheet("background: transparent;")
-            dlay = QHBoxLayout(dw)
-            dlay.setContentsMargins(4, 8, 4, 8)
-            dlay.setAlignment(Qt.AlignCenter)
-            dlay.addWidget(due_pill)
-            self.table.setCellWidget(r_idx, 4, dw)
+                # Col 4: Balance Due (₹) & Status
+                due = c["outstanding"]
+                self.table.setItem(r_idx, 4, QTableWidgetItem(""))
+                due_pill = QLabel(_money(due) if due > 0.01 else "Settled")
+                due_pill.setAlignment(Qt.AlignCenter)
+                if due > 0.01:
+                    due_pill.setStyleSheet(
+                        "background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA; "
+                        "border-radius: 4px; font-weight: 800; font-size: 10px; padding: 2px 6px;"
+                    )
+                else:
+                    due_pill.setStyleSheet(
+                        "background: #ECFDF5; color: #059669; border: 1px solid #A7F3D0; "
+                        "border-radius: 4px; font-weight: 700; font-size: 10px; padding: 2px 6px;"
+                    )
+                dw = QWidget()
+                dw.setStyleSheet("background: transparent;")
+                dlay = QHBoxLayout(dw)
+                dlay.setContentsMargins(4, 8, 4, 8)
+                dlay.setAlignment(Qt.AlignCenter)
+                dlay.addWidget(due_pill)
+                self.table.setCellWidget(r_idx, 4, dw)
+        finally:
+            self.table.setUpdatesEnabled(True)
 
         tot_shown_due = sum(c["outstanding"] for c in filtered)
         self.lbl_table_footer.setText(
@@ -1064,45 +1066,18 @@ class CustomersPage(BasePage):
             show_toast(self, "No customer accounts to export.", "warning")
             return
 
+        from app.utils.excel_exporter import export_customer_directory_to_excel
         path, _ = QFileDialog.getSaveFileName(
             self, "Export Customer Directory",
-            os.path.expanduser("~/Customer_Directory_Ledger.csv"),
-            "CSV Files (*.csv)",
+            os.path.expanduser("~/Customer_Directory_Ledger.xlsx"),
+            "Excel Workbook (*.xlsx);;CSV Files (*.csv)",
         )
         if not path:
             return
-        if not path.lower().endswith(".csv"):
-            path += ".csv"
 
         try:
-            headers = [
-                "Customer ID", "Customer Name", "Contact Mobile", "Email Address",
-                "City", "State", "GSTIN", "Invoices Count",
-                "Total Billed (INR)", "Total Collected (INR)", "Outstanding Balance (INR)",
-                "Settlement Status"
-            ]
-            export_rows = []
-            for c in self._customers_cache:
-                export_rows.append([
-                    c["id"],
-                    c["name"],
-                    c["mobile"],
-                    c["email"],
-                    c["city"],
-                    c["state"],
-                    c["gstin"],
-                    c["invoice_count"],
-                    f"{c['total_invoiced']:.2f}",
-                    f"{c['total_paid']:.2f}",
-                    f"{c['outstanding']:.2f}",
-                    "Settled" if c["is_settled"] else "Pending Due",
-                ])
-
-            with open(path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.writer(f)
-                writer.writerow(headers)
-                writer.writerows(export_rows)
-
-            show_toast(self, f"Exported {len(export_rows)} customers to {os.path.basename(path)}", "success")
+            export_customer_directory_to_excel(path, self._customers_cache)
+            show_toast(self, f"Exported {len(self._customers_cache)} customers to {os.path.basename(path)}", "success")
         except Exception as e:  # noqa: BLE001
             show_toast(self, f"Export failed: {e}", "error")
+

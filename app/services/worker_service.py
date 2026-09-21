@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import calendar
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -811,6 +811,18 @@ def get_worker_monthly_summary(worker_id: int, year: int, month: int) -> dict | 
         is_settled = bool(settlement.is_settled) if settlement else False
         remaining_balance = _quant(net_payable - paid_amount)
 
+        # Most recent settlement cutoff date across all history for this worker
+        last_settled_row = (
+            session.query(func.coalesce(WorkerSettlement.end_date, WorkerSettlement.payment_date))
+            .filter(
+                WorkerSettlement.worker_id == worker_id,
+                WorkerSettlement.is_settled.is_(True),
+            )
+            .order_by(desc(func.coalesce(WorkerSettlement.end_date, WorkerSettlement.payment_date)))
+            .first()
+        )
+        last_settled_date = last_settled_row[0] if last_settled_row and last_settled_row[0] else None
+
         return {
             "worker_id": w.id,
             "worker_code": w.worker_code,
@@ -842,6 +854,15 @@ def get_worker_monthly_summary(worker_id: int, year: int, month: int) -> dict | 
             "paid_amount": float(paid_amount),
             "remaining_balance": float(remaining_balance),
             "is_settled": is_settled,
+            "voucher_no": settlement.voucher_no if settlement else "",
+            "start_date": settlement.start_date if settlement else None,
+            "end_date": settlement.end_date if settlement else None,
+            "payment_date": settlement.payment_date if settlement else None,
+            "payment_date_str": settlement.payment_date.strftime("%d %b %Y") if settlement and settlement.payment_date else "",
+            "payment_method": settlement.payment_method if settlement else "",
+            "settlement_notes": settlement.notes if settlement else "",
+            "last_settled_date": last_settled_date,
+            "last_settled_date_str": last_settled_date.strftime("%d %b %Y") if last_settled_date else "",
             # Itemized lists
             "attendances": [
                 {
@@ -851,7 +872,8 @@ def get_worker_monthly_summary(worker_id: int, year: int, month: int) -> dict | 
                     "status_label": a.status_label,
                     "day_multiplier": float(a.day_multiplier),
                     "daily_rate": float(a.daily_rate),
-                    "daily_earning": float(a.daily_earning),
+                    "daily_earning": float(a.daily_earning if a.daily_earning is not None else ((a.daily_rate or 0) * (a.day_multiplier or 0))),
+                    "is_settled": bool(last_settled_date and a.attendance_date <= last_settled_date),
                     "notes": a.notes or "",
                 }
                 for a in attendances
@@ -863,6 +885,7 @@ def get_worker_monthly_summary(worker_id: int, year: int, month: int) -> dict | 
                     "date_str": e.expense_date.strftime("%d %b %Y"),
                     "amount": float(e.amount),
                     "category": e.category,
+                    "is_settled": bool(last_settled_date and e.expense_date <= last_settled_date),
                     "notes": e.notes or "",
                 }
                 for e in expenses
@@ -875,6 +898,7 @@ def get_worker_monthly_summary(worker_id: int, year: int, month: int) -> dict | 
                     "amount": float(adj.amount),
                     "type": adj.adjustment_type,
                     "category": adj.category,
+                    "is_settled": bool(last_settled_date and adj.adjustment_date <= last_settled_date),
                     "notes": adj.notes or "",
                 }
                 for adj in adjustments
@@ -886,6 +910,7 @@ def get_worker_monthly_summary(worker_id: int, year: int, month: int) -> dict | 
                     "date_str": adv.advance_date.strftime("%d %b %Y"),
                     "amount": float(adv.amount),
                     "payment_method": adv.payment_method,
+                    "is_settled": bool(last_settled_date and adv.advance_date <= last_settled_date),
                     "notes": adv.notes or "",
                 }
                 for adv in advances
@@ -913,8 +938,193 @@ def get_all_workers_monthly_summary(
 
 
 # ===========================================================================
-# 7. Settlement Management
+# 7. Settlement & Payment Done Management
 # ===========================================================================
+
+def get_worker_last_settled_date(worker_id: int) -> date | None:
+    """Find the most recent settlement cutoff date (end_date or payment_date) for this worker."""
+    session = get_session()
+    try:
+        res = (
+            session.query(func.coalesce(WorkerSettlement.end_date, WorkerSettlement.payment_date))
+            .filter(
+                WorkerSettlement.worker_id == worker_id,
+                WorkerSettlement.is_settled.is_(True),
+            )
+            .order_by(desc(func.coalesce(WorkerSettlement.end_date, WorkerSettlement.payment_date)))
+            .first()
+        )
+        return res[0] if res and res[0] else None
+    finally:
+        session.close()
+
+
+def get_worker_active_cycle(worker_id: int, up_to_date: date | None = None) -> dict:
+    """Calculate active unsettled work days, earnings, advances, and net due since last settlement."""
+    if up_to_date is None:
+        up_to_date = date.today()
+
+    session = get_session()
+    try:
+        w = session.query(Worker).filter(Worker.id == worker_id).first()
+        if not w:
+            raise ValueError(f"Worker {worker_id} not found.")
+
+        last_settled = get_worker_last_settled_date(worker_id)
+        if last_settled:
+            start_date = last_settled + timedelta(days=1)
+        else:
+            first_att = session.query(func.min(WorkerAttendance.attendance_date)).filter(WorkerAttendance.worker_id == worker_id).scalar()
+            first_adv = session.query(func.min(WorkerAdvance.advance_date)).filter(WorkerAdvance.worker_id == worker_id).scalar()
+            candidates = [d for d in (first_att, first_adv, w.joining_date, date(up_to_date.year, up_to_date.month, 1)) if d is not None]
+            start_date = min(candidates) if candidates else date(up_to_date.year, up_to_date.month, 1)
+
+        # Query attendances in active cycle [start_date, up_to_date]
+        attendances = (
+            session.query(WorkerAttendance)
+            .filter(
+                WorkerAttendance.worker_id == worker_id,
+                WorkerAttendance.attendance_date >= start_date,
+                WorkerAttendance.attendance_date <= up_to_date,
+            )
+            .order_by(WorkerAttendance.attendance_date.asc())
+            .all()
+        )
+
+        total_units = Decimal("0.0")
+        total_work_earning = Decimal("0.0")
+        for a in attendances:
+            total_units += _dec(a.day_multiplier)
+            total_work_earning += _dec(a.daily_earning)
+
+        # Query expenses
+        expenses = (
+            session.query(WorkerExpense)
+            .filter(
+                WorkerExpense.worker_id == worker_id,
+                WorkerExpense.expense_date >= start_date,
+                WorkerExpense.expense_date <= up_to_date,
+            )
+            .all()
+        )
+        total_travel = sum((_dec(e.amount) for e in expenses), Decimal("0.0"))
+
+        # Query adjustments
+        adjustments = (
+            session.query(WorkerAdjustment)
+            .filter(
+                WorkerAdjustment.worker_id == worker_id,
+                WorkerAdjustment.adjustment_date >= start_date,
+                WorkerAdjustment.adjustment_date <= up_to_date,
+            )
+            .all()
+        )
+        total_additions = sum((_dec(adj.amount) for adj in adjustments if adj.adjustment_type == "ADDITION"), Decimal("0.0"))
+        total_other_deductions = sum((_dec(adj.amount) for adj in adjustments if adj.adjustment_type == "DEDUCTION"), Decimal("0.0"))
+
+        # Query advances
+        advances = (
+            session.query(WorkerAdvance)
+            .filter(
+                WorkerAdvance.worker_id == worker_id,
+                WorkerAdvance.advance_date >= start_date,
+                WorkerAdvance.advance_date <= up_to_date,
+            )
+            .all()
+        )
+        total_advances = sum((_dec(adv.amount) for adv in advances), Decimal("0.0"))
+
+        gross_payable = total_work_earning + total_travel + total_additions
+        total_deductions = total_advances + total_other_deductions
+        net_payable = _quant(gross_payable - total_deductions)
+
+        return {
+            "worker_id": w.id,
+            "worker_code": w.worker_code,
+            "worker_name": w.name,
+            "work_type": w.work_type,
+            "daily_rate": float(w.daily_rate or 0),
+            "last_settled_date": last_settled,
+            "last_settled_date_str": last_settled.strftime("%d %b %Y") if last_settled else "None (Fresh)",
+            "start_date": start_date,
+            "start_date_str": start_date.strftime("%d %b %Y"),
+            "end_date": up_to_date,
+            "end_date_str": up_to_date.strftime("%d %b %Y"),
+            "total_units": float(total_units),
+            "work_earnings": float(_quant(total_work_earning)),
+            "total_work_earning": float(_quant(total_work_earning)),
+            "total_travel": float(_quant(total_travel)),
+            "total_additions": float(_quant(total_additions)),
+            "gross_payable": float(_quant(gross_payable)),
+            "total_advances": float(_quant(total_advances)),
+            "total_deductions": float(_quant(total_deductions)),
+            "net_payable": float(net_payable),
+            "num_attendance_days": len(attendances),
+            "num_advances": len(advances),
+            "num_expenses": len(expenses),
+        }
+    finally:
+        session.close()
+
+
+def record_full_payment_done(
+    worker_id: int,
+    end_date: date,
+    paid_amount: float | Decimal,
+    payment_method: str = "Cash",
+    notes: str = "",
+    start_date: date | None = None,
+) -> WorkerSettlement:
+    """Confirm full payment done for a period, locking the batch and resetting active cycle."""
+    session = get_session()
+    try:
+        w = session.query(Worker).filter(Worker.id == worker_id).first()
+        if not w:
+            raise ValueError(f"Worker {worker_id} not found.")
+
+        last_settled = get_worker_last_settled_date(worker_id)
+        if start_date is None:
+            if last_settled:
+                start_date = last_settled + timedelta(days=1)
+            else:
+                start_date = w.joining_date or date(end_date.year, end_date.month, 1)
+
+        active_data = get_worker_active_cycle(worker_id, up_to_date=end_date)
+        total_settlements = session.query(func.count(WorkerSettlement.id)).scalar() or 0
+        voucher_no = f"PAY-{end_date.year}-{(total_settlements + 1):04d}"
+
+        month_year = f"{end_date.year:04d}-{end_date.month:02d}"
+        paid_dec = _dec(paid_amount)
+
+        settlement = WorkerSettlement(
+            worker_id=worker_id,
+            month_year=month_year,
+            voucher_no=voucher_no,
+            start_date=start_date,
+            end_date=end_date,
+            total_units=_dec(active_data["total_units"]),
+            total_work_earning=_dec(active_data["work_earnings"]),
+            total_travel=_dec(active_data["total_travel"]),
+            total_additions=_dec(active_data["total_additions"]),
+            gross_payable=_dec(active_data["gross_payable"]),
+            total_advances=_dec(active_data["total_advances"]),
+            total_deductions=_dec(active_data["total_deductions"]),
+            net_payable=_dec(active_data["net_payable"]),
+            paid_amount=paid_dec,
+            payment_date=date.today(),
+            payment_method=payment_method,
+            is_settled=True,
+            notes=(notes or "").strip(),
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        session.add(settlement)
+        session.commit()
+        session.refresh(settlement)
+        return settlement
+    finally:
+        session.close()
+
 
 def record_settlement(
     worker_id: int,
@@ -923,6 +1133,8 @@ def record_settlement(
     paid_amount: float | Decimal,
     payment_method: str = "Cash",
     notes: str = "",
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> WorkerSettlement:
     """Record final payment / settlement for a month without destroying historical records."""
     summary = get_worker_monthly_summary(worker_id, year, month)
@@ -931,6 +1143,16 @@ def record_settlement(
 
     paid_dec = _dec(paid_amount)
     month_year = f"{year:04d}-{month:02d}"
+
+    if start_date is None:
+        start_date = date(year, month, 1)
+    if end_date is None:
+        last_day = calendar.monthrange(year, month)[1]
+        today = date.today()
+        if today.year == year and today.month == month:
+            end_date = today
+        else:
+            end_date = date(year, month, last_day)
 
     session = get_session()
     try:
@@ -942,6 +1164,9 @@ def record_settlement(
             )
             .first()
         )
+
+        total_settlements = session.query(func.count(WorkerSettlement.id)).scalar() or 0
+        voucher_no = f"PAY-{year}-{(total_settlements + 1):04d}"
 
         if settlement:
             settlement.total_units = _dec(summary["total_units"])
@@ -957,11 +1182,19 @@ def record_settlement(
             settlement.payment_method = payment_method
             settlement.is_settled = True
             settlement.notes = (notes or "").strip()
+            if not settlement.voucher_no:
+                settlement.voucher_no = voucher_no
+            if not settlement.start_date:
+                settlement.start_date = start_date
+            settlement.end_date = end_date
             settlement.updated_at = datetime.now(timezone.utc)
         else:
             settlement = WorkerSettlement(
                 worker_id=worker_id,
                 month_year=month_year,
+                voucher_no=voucher_no,
+                start_date=start_date,
+                end_date=end_date,
                 total_units=_dec(summary["total_units"]),
                 total_work_earning=_dec(summary["total_work_earning"]),
                 total_travel=_dec(summary["total_travel"]),
@@ -1002,6 +1235,160 @@ def is_month_settled(worker_id: int, year: int, month: int) -> bool:
             .first()
         )
         return st is not None
+    finally:
+        session.close()
+
+
+def get_worker_settlement_history(worker_id: int) -> list[dict]:
+    """Retrieve all recorded settlements for a worker ordered newest to oldest."""
+    session = get_session()
+    try:
+        settlements = (
+            session.query(WorkerSettlement)
+            .filter(WorkerSettlement.worker_id == worker_id, WorkerSettlement.is_settled.is_(True))
+            .order_by(desc(WorkerSettlement.payment_date), desc(WorkerSettlement.id))
+            .all()
+        )
+        res = []
+        for st in settlements:
+            start_str = st.start_date.strftime("%d %b %y") if st.start_date else ""
+            end_str = st.end_date.strftime("%d %b %y") if st.end_date else ""
+            if start_str and end_str:
+                period_label = f"{start_str} → {end_str}"
+            else:
+                parts = st.month_year.split("-") if st.month_year else ["", ""]
+                if len(parts) == 2 and parts[1].isdigit():
+                    m_idx = int(parts[1])
+                    period_label = f"{calendar.month_name[m_idx][:3]} {parts[0]}"
+                else:
+                    period_label = st.month_year or "—"
+
+            res.append({
+                "id": st.id,
+                "voucher_no": st.voucher_no or f"PAY-{st.id:04d}",
+                "month_year": st.month_year,
+                "month_label": period_label,
+                "start_date": st.start_date,
+                "end_date": st.end_date,
+                "total_units": float(st.total_units or 0),
+                "total_work_earning": float(st.total_work_earning or 0),
+                "gross_payable": float(st.gross_payable or 0),
+                "total_advances": float(st.total_advances or 0),
+                "net_payable": float(st.net_payable or 0),
+                "paid_amount": float(st.paid_amount or 0),
+                "payment_date": st.payment_date,
+                "payment_date_str": st.payment_date.strftime("%d %b %y") if st.payment_date else "—",
+                "payment_method": st.payment_method or "Cash",
+                "is_settled": bool(st.is_settled),
+                "notes": st.notes or "",
+            })
+        return res
+    finally:
+        session.close()
+
+
+def get_all_payment_done_records(
+    worker_id: int | None = None,
+    year: int | None = None,
+    month: int | None = None,
+    search_query: str = "",
+) -> list[dict]:
+    """Retrieve all confirmed payment records across workers for the Payment Done ledger."""
+    session = get_session()
+    try:
+        q = (
+            session.query(WorkerSettlement, Worker)
+            .join(Worker, WorkerSettlement.worker_id == Worker.id)
+            .filter(WorkerSettlement.is_settled.is_(True))
+        )
+        if worker_id:
+            q = q.filter(WorkerSettlement.worker_id == worker_id)
+        if year:
+            q = q.filter(
+                or_(
+                    extract("year", WorkerSettlement.payment_date) == year,
+                    WorkerSettlement.month_year.startswith(f"{year:04d}"),
+                )
+            )
+        if month:
+            q = q.filter(
+                or_(
+                    extract("month", WorkerSettlement.payment_date) == month,
+                    WorkerSettlement.month_year.endswith(f"-{month:02d}"),
+                )
+            )
+        if search_query:
+            sq = f"%{search_query.strip()}%"
+            q = q.filter(
+                or_(
+                    Worker.name.ilike(sq),
+                    WorkerSettlement.voucher_no.ilike(sq),
+                    WorkerSettlement.notes.ilike(sq),
+                    Worker.work_type.ilike(sq),
+                )
+            )
+
+        q = q.order_by(desc(WorkerSettlement.payment_date), desc(WorkerSettlement.id))
+        records = q.all()
+
+        results = []
+        for st, w in records:
+            start_str = st.start_date.strftime("%d %b %Y") if st.start_date else ""
+            end_str = st.end_date.strftime("%d %b %Y") if st.end_date else ""
+            if start_str and end_str:
+                period_label = f"{start_str} → {end_str}"
+            elif st.end_date:
+                period_label = f"Up to {end_str}"
+            else:
+                parts = st.month_year.split("-") if st.month_year else ["", ""]
+                if len(parts) == 2 and parts[1].isdigit():
+                    m_idx = int(parts[1])
+                    period_label = f"{calendar.month_name[m_idx][:3]} {parts[0]}"
+                else:
+                    period_label = st.month_year or "—"
+
+            results.append({
+                "id": st.id,
+                "voucher_no": st.voucher_no or f"PAY-{st.id:04d}",
+                "worker_id": w.id,
+                "worker_name": w.name,
+                "worker_code": w.worker_code,
+                "work_type": w.work_type or "Mistri",
+                "daily_rate": float(w.daily_rate or 0),
+                "mobile": w.mobile or "—",
+                "start_date": st.start_date,
+                "end_date": st.end_date,
+                "start_date_str": start_str,
+                "end_date_str": end_str,
+                "period_label": period_label,
+                "total_units": float(st.total_units or 0),
+                "work_earnings": float(st.total_work_earning or 0),
+                "gross_payable": float(st.gross_payable or 0),
+                "total_advances": float(st.total_advances or 0),
+                "total_deductions": float(st.total_deductions or 0),
+                "net_payable": float(st.net_payable or 0),
+                "paid_amount": float(st.paid_amount or 0),
+                "payment_date": st.payment_date,
+                "payment_date_str": st.payment_date.strftime("%d %b %Y") if st.payment_date else "—",
+                "payment_method": st.payment_method or "Cash",
+                "is_settled": bool(st.is_settled),
+                "notes": st.notes or "",
+            })
+        return results
+    finally:
+        session.close()
+
+
+def rollback_payment_done(settlement_id: int) -> bool:
+    """Delete a settlement record, reopening its days back to the active unsettled pool."""
+    session = get_session()
+    try:
+        st = session.query(WorkerSettlement).filter(WorkerSettlement.id == settlement_id).first()
+        if not st:
+            return False
+        session.delete(st)
+        session.commit()
+        return True
     finally:
         session.close()
 
@@ -1161,3 +1548,69 @@ def generate_whatsapp_summary_text(
     lines.append("──────────────────────")
     lines.append("Generated via Furniture Bill Software")
     return "\n".join(lines)
+
+
+def generate_payment_done_whatsapp_text(
+    settlement_id: int,
+    business_name: str = "",
+) -> str:
+    """Generate crisp WhatsApp confirmation message for a settled payment voucher."""
+    session = get_session()
+    try:
+        st = session.query(WorkerSettlement).filter_by(id=settlement_id).first()
+        if not st:
+            return ""
+        w = session.query(Worker).filter_by(id=st.worker_id).first()
+        worker_name = w.name if w else "Worker"
+        work_type = w.work_type if w else "Staff"
+        worker_code = w.worker_code if w else ""
+
+        start_str = st.start_date.strftime("%d %b %Y") if st.start_date else ""
+        end_str = st.end_date.strftime("%d %b %Y") if st.end_date else ""
+        if start_str and end_str:
+            period_label = f"{start_str} to {end_str}"
+        elif st.end_date:
+            period_label = f"Up to {end_str}"
+        else:
+            period_label = st.month_year or "—"
+
+        shop_title = f"*{business_name}*" if business_name else "*FURNITURE WORKSHOP*"
+        p_date_str = st.payment_date.strftime("%d %b %Y") if st.payment_date else "—"
+
+        lines = [
+            f"👷 {shop_title}",
+            f"🧾 *PAYMENT RECEIPT / VOUCHER*",
+            f"🏷 *Voucher No:* {st.voucher_no or f'PAY-{st.id:04d}'}",
+            f"👤 *Worker:* {worker_name} ({work_type})",
+            f"🆔 *Worker ID:* {worker_code}",
+            f"📅 *Settled Period:* {period_label}",
+            f"🗓 *Payment Date:* {p_date_str}",
+            f"💳 *Payment Method:* {st.payment_method or 'Cash'}",
+            "──────────────────────",
+            "📊 *SETTLEMENT BREAKDOWN:*",
+            f"• Days Paid: {float(st.total_units or 0):.1f} Days",
+            f"• Work Earnings: ₹{float(st.total_work_earning or 0):,.2f}",
+        ]
+        gross = float(st.gross_payable or 0)
+        if gross > float(st.total_work_earning or 0):
+            lines.append(f"• Gross Payable (with Travel/Bonuses): ₹{gross:,.2f}")
+        adv = float(st.total_advances or 0)
+        if adv > 0:
+            lines.append(f"• Advances Deducted: -₹{adv:,.2f}")
+        ded = float(st.total_deductions or 0)
+        if ded > 0:
+            lines.append(f"• Other Deductions: -₹{ded:,.2f}")
+
+        lines.extend([
+            "──────────────────────",
+            f"✅ *NET PAID: ₹{float(st.paid_amount or 0):,.2f}*",
+            "Status: ✓ FULLY SETTLED & PAID",
+        ])
+        if st.notes:
+            lines.append(f"📝 *Notes:* {st.notes}")
+        lines.append("──────────────────────")
+        lines.append("Generated via Furniture Bill Software")
+        return "\n".join(lines)
+    finally:
+        session.close()
+

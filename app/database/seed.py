@@ -144,6 +144,16 @@ def _migrate_schema() -> None:
                 conn.execute(text(
                     f"ALTER TABLE business_profile ADD COLUMN {col_name} {col_type} DEFAULT {default}"
                 ))
+        # --- Worker Settlement date-range & voucher columns ---
+        ws_cols = [r[1] for r in conn.execute(text("PRAGMA table_info(worker_settlements)"))]
+        for col_name, col_type in [
+            ("voucher_no", "VARCHAR(30)"),
+            ("start_date", "DATE"),
+            ("end_date", "DATE"),
+        ]:
+            if col_name not in ws_cols:
+                conn.execute(text(f"ALTER TABLE worker_settlements ADD COLUMN {col_name} {col_type}"))
+
         conn.commit()
 
 

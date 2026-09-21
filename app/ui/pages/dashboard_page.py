@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 from PySide6.QtCore import QMargins, Qt, QTimer, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QColor, QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -346,8 +346,8 @@ class DashboardPage(BasePage):
         hh_pend.setSectionResizeMode(0, QHeaderView.Stretch)
         hh_pend.setSectionResizeMode(1, QHeaderView.Interactive)
         hh_pend.setSectionResizeMode(2, QHeaderView.Interactive)
-        self.pending_collections_table.setColumnWidth(1, 130)
-        self.pending_collections_table.setColumnWidth(2, 120)
+        self.pending_collections_table.setColumnWidth(1, 120)
+        self.pending_collections_table.setColumnWidth(2, 175)
         pending_lay.addWidget(self.pending_collections_table)
         right_col.addWidget(pending_card)
 
@@ -456,8 +456,8 @@ class DashboardPage(BasePage):
         paid_inv = stats.get("paid_invoices", 0)
         tot_cust = stats.get("total_customers", 0)
 
-        # Estimate billed total
-        tot_billed = float(tot_inc) + float(tot_out)
+        # Exact billed total from database aggregation
+        tot_billed = stats.get("total_billed", float(tot_inc) + float(tot_out))
 
         self.card_monthly.set_value(_money(m_inc))
         self.card_monthly.set_sub(f"Today: {_money(t_inc)}")
@@ -506,60 +506,63 @@ class DashboardPage(BasePage):
             t.setSpan(0, 0, 1, 5)
             return
 
-        for inv in invoices:
-            r = t.rowCount()
-            t.insertRow(r)
-            customer = inv["customer_name"] or "—"
-            status = compute_status(inv["grand_total"], inv["paid"], inv["status"], inv["due_date"])
+        t.setUpdatesEnabled(False)
+        t.setRowCount(len(invoices))
+        try:
+            for r, inv in enumerate(invoices):
+                customer = inv["customer_name"] or "—"
+                status = compute_status(inv["grand_total"], inv["paid"], inv["status"], inv["due_date"])
 
-            # Col 0: Invoice No
-            it_no = QTableWidgetItem(inv["invoice_number"] or "")
-            it_no.setData(Qt.UserRole, inv["id"])
-            it_no.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-            it_no.setForeground(Qt.GlobalColor.darkBlue)
-            t.setItem(r, 0, it_no)
+                # Col 0: Invoice No
+                it_no = QTableWidgetItem(inv["invoice_number"] or "")
+                it_no.setData(Qt.UserRole, inv["id"])
+                it_no.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                it_no.setForeground(Qt.GlobalColor.darkBlue)
+                t.setItem(r, 0, it_no)
 
-            # Col 1: Customer
-            it_cust = QTableWidgetItem(customer)
-            it_cust.setData(Qt.UserRole, inv["id"])
-            t.setItem(r, 1, it_cust)
+                # Col 1: Customer
+                it_cust = QTableWidgetItem(customer)
+                it_cust.setData(Qt.UserRole, inv["id"])
+                t.setItem(r, 1, it_cust)
 
-            # Col 2: Date
-            it_date = QTableWidgetItem(inv["invoice_date"].strftime("%d-%b-%Y") if inv["invoice_date"] else "—")
-            it_date.setData(Qt.UserRole, inv["id"])
-            t.setItem(r, 2, it_date)
+                # Col 2: Date
+                it_date = QTableWidgetItem(inv["invoice_date"].strftime("%d-%b-%Y") if inv["invoice_date"] else "—")
+                it_date.setData(Qt.UserRole, inv["id"])
+                t.setItem(r, 2, it_date)
 
-            # Col 3: Status Badge
-            w_st = QWidget()
-            lay_st = QHBoxLayout(w_st)
-            lay_st.setContentsMargins(4, 2, 4, 2)
-            lay_st.setAlignment(Qt.AlignCenter)
-            badge = QLabel(status)
-            badge.setAlignment(Qt.AlignCenter)
+                # Col 3: Status Badge
+                w_st = QWidget()
+                lay_st = QHBoxLayout(w_st)
+                lay_st.setContentsMargins(4, 2, 4, 2)
+                lay_st.setAlignment(Qt.AlignCenter)
+                badge = QLabel(status)
+                badge.setAlignment(Qt.AlignCenter)
 
-            if status == "PAID":
-                badge_style = "background: #ECFDF5; color: #059669; border: 1px solid #A7F3D0;"
-            elif status == "PARTIALLY PAID":
-                badge_style = "background: #FFFBEB; color: #D97706; border: 1px solid #FDE68A;"
-            elif status == "OVERDUE":
-                badge_style = "background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA;"
-            elif status == "UNPAID":
-                badge_style = "background: #EFF6FF; color: #2563EB; border: 1px solid #BFDBFE;"
-            else:
-                badge_style = "background: #F1F5F9; color: #475569; border: 1px solid #CBD5E1;"
+                if status == "PAID":
+                    badge_style = "background: #ECFDF5; color: #059669; border: 1px solid #A7F3D0;"
+                elif status == "PARTIALLY PAID":
+                    badge_style = "background: #FFFBEB; color: #D97706; border: 1px solid #FDE68A;"
+                elif status == "OVERDUE":
+                    badge_style = "background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA;"
+                elif status == "UNPAID":
+                    badge_style = "background: #EFF6FF; color: #2563EB; border: 1px solid #BFDBFE;"
+                else:
+                    badge_style = "background: #F1F5F9; color: #475569; border: 1px solid #CBD5E1;"
 
-            badge.setStyleSheet(f"{badge_style} border-radius: 9px; font-weight: 700; font-size: 10px; padding: 2px 8px;")
-            lay_st.addWidget(badge)
-            it_st = QTableWidgetItem("")
-            it_st.setData(Qt.UserRole, inv["id"])
-            t.setItem(r, 3, it_st)
-            t.setCellWidget(r, 3, w_st)
+                badge.setStyleSheet(f"{badge_style} border-radius: 9px; font-weight: 700; font-size: 10px; padding: 2px 8px;")
+                lay_st.addWidget(badge)
+                it_st = QTableWidgetItem("")
+                it_st.setData(Qt.UserRole, inv["id"])
+                t.setItem(r, 3, it_st)
+                t.setCellWidget(r, 3, w_st)
 
-            # Col 4: Amount
-            it_amt = QTableWidgetItem(_money(inv["grand_total"]))
-            it_amt.setData(Qt.UserRole, inv["id"])
-            it_amt.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
-            t.setItem(r, 4, it_amt)
+                # Col 4: Amount
+                it_amt = QTableWidgetItem(_money(inv["grand_total"]))
+                it_amt.setData(Qt.UserRole, inv["id"])
+                it_amt.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                t.setItem(r, 4, it_amt)
+        finally:
+            t.setUpdatesEnabled(True)
 
     def _render_recent_payments(self):
         t = self.recent_payments_table
@@ -573,18 +576,21 @@ class DashboardPage(BasePage):
             t.setSpan(0, 0, 1, 5)
             return
 
-        for p in payments:
-            r = t.rowCount()
-            t.insertRow(r)
-            t.setItem(r, 0, QTableWidgetItem(p["date"].strftime("%d-%b-%Y") if p["date"] else "—"))
-            t.setItem(r, 1, QTableWidgetItem(p["invoice_number"] or "—"))
-            t.setItem(r, 2, QTableWidgetItem(p["mode"] or "Cash"))
-            t.setItem(r, 3, QTableWidgetItem(p["reference"] or "—"))
+        t.setUpdatesEnabled(False)
+        t.setRowCount(len(payments))
+        try:
+            for r, p in enumerate(payments):
+                t.setItem(r, 0, QTableWidgetItem(p["date"].strftime("%d-%b-%Y") if p["date"] else "—"))
+                t.setItem(r, 1, QTableWidgetItem(p["invoice_number"] or "—"))
+                t.setItem(r, 2, QTableWidgetItem(p["mode"] or "Cash"))
+                t.setItem(r, 3, QTableWidgetItem(p["reference"] or "—"))
 
-            amt = QTableWidgetItem(_money(p["amount"]))
-            amt.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            amt.setForeground(Qt.GlobalColor.darkGreen)
-            t.setItem(r, 4, amt)
+                amt = QTableWidgetItem(_money(p["amount"]))
+                amt.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                amt.setForeground(Qt.GlobalColor.darkGreen)
+                t.setItem(r, 4, amt)
+        finally:
+            t.setUpdatesEnabled(True)
 
     def _render_pending_collections(self):
         t = self.pending_collections_table
@@ -598,42 +604,92 @@ class DashboardPage(BasePage):
             t.setSpan(0, 0, 1, 3)
             return
 
-        for r, it in enumerate(items):
-            t.insertRow(r)
+        t.setUpdatesEnabled(False)
+        t.setRowCount(len(items))
+        try:
+            for r, it in enumerate(items):
+                # Col 0: Customer & Mobile (2-line layout)
+                w_cust = QWidget()
+                lay_cust = QVBoxLayout(w_cust)
+                lay_cust.setContentsMargins(6, 2, 6, 2)
+                lay_cust.setSpacing(1)
+                lbl_name = QLabel(it["customer_name"])
+                lbl_name.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 11px;")
+                lbl_mob = QLabel(f"☎ {it['mobile']}" if it['mobile'] else "No phone")
+                lbl_mob.setStyleSheet("color: #64748B; font-size: 10px;")
+                lay_cust.addWidget(lbl_name)
+                lay_cust.addWidget(lbl_mob)
+                t.setItem(r, 0, QTableWidgetItem(""))
+                t.setCellWidget(r, 0, w_cust)
 
-            # Col 0: Customer & Mobile (2-line layout)
-            w_cust = QWidget()
-            lay_cust = QVBoxLayout(w_cust)
-            lay_cust.setContentsMargins(6, 2, 6, 2)
-            lay_cust.setSpacing(1)
-            lbl_name = QLabel(it["customer_name"])
-            lbl_name.setStyleSheet("font-weight: 700; color: #0F172A; font-size: 11px;")
-            lbl_mob = QLabel(f"☎ {it['mobile']}" if it['mobile'] else "No phone")
-            lbl_mob.setStyleSheet("color: #64748B; font-size: 10px;")
-            lay_cust.addWidget(lbl_name)
-            lay_cust.addWidget(lbl_mob)
-            t.setItem(r, 0, QTableWidgetItem(""))
-            t.setCellWidget(r, 0, w_cust)
+                # Col 1: Due Balance
+                it_bal = QTableWidgetItem(_money(it["outstanding"]))
+                it_bal.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                it_bal.setForeground(QColor("#DC2626"))
+                it_bal.setFont(QFont("Segoe UI", 9, QFont.Bold))
+                t.setItem(r, 1, it_bal)
 
-            # Col 1: Due Amount
-            amt_item = QTableWidgetItem(_money(it["outstanding"]))
-            amt_item.setForeground(Qt.GlobalColor.darkRed)
-            amt_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            t.setItem(r, 1, amt_item)
+                # Col 2: Action buttons (WhatsApp Remind + Collect Payment)
+                w_btn = QWidget()
+                lay_btn = QHBoxLayout(w_btn)
+                lay_btn.setContentsMargins(2, 2, 2, 2)
+                lay_btn.setSpacing(4)
+                lay_btn.setAlignment(Qt.AlignCenter)
 
-            # Col 2: Action Button
-            btn = QPushButton("💬 Remind")
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setToolTip("Send payment reminder on WhatsApp")
-            btn.setStyleSheet(
-                "QPushButton { background: #059669; color: white; border: none; border-radius: 5px; "
-                "padding: 4px 8px; font-weight: 700; font-size: 11px; }"
-                "QPushButton:hover { background: #047857; }"
-            )
-            cid = it["customer_id"]
-            btn.clicked.connect(lambda _, c_id=cid: self._send_dashboard_whatsapp(c_id))
-            t.setItem(r, 2, QTableWidgetItem(""))
-            t.setCellWidget(r, 2, btn)
+                btn_remind = QPushButton("💬 Remind")
+                btn_remind.setObjectName("dashReminderBtn")
+                btn_remind.setCursor(Qt.PointingHandCursor)
+                btn_remind.setToolTip("Send WhatsApp reminder message")
+                btn_remind.setStyleSheet(
+                    "QPushButton#dashReminderBtn { background: #ECFDF5; border: 1px solid #A7F3D0;"
+                    " border-radius: 6px; color: #059669; font-weight: 700; font-size: 10px; padding: 4px 6px; }"
+                    "QPushButton#dashReminderBtn:hover { background: #D1FAE5; border-color: #6EE7B7; }"
+                )
+                btn_remind.clicked.connect(lambda _, item=it: self._send_whatsapp_reminder(item))
+                lay_btn.addWidget(btn_remind)
+
+                btn_collect = QPushButton("💳 Collect")
+                btn_collect.setObjectName("dashCollectBtn")
+                btn_collect.setCursor(Qt.PointingHandCursor)
+                btn_collect.setToolTip("Record received payment or settle full balance")
+                btn_collect.setStyleSheet(
+                    "QPushButton#dashCollectBtn { background: #EFF6FF; border: 1px solid #BFDBFE;"
+                    " border-radius: 6px; color: #1D4ED8; font-weight: 700; font-size: 10px; padding: 4px 6px; }"
+                    "QPushButton#dashCollectBtn:hover { background: #DBEAFE; border-color: #93C5FD; }"
+                )
+                btn_collect.clicked.connect(lambda _, item=it: self._open_payment_for_customer(item))
+                lay_btn.addWidget(btn_collect)
+
+                t.setItem(r, 2, QTableWidgetItem(""))
+                t.setCellWidget(r, 2, w_btn)
+        finally:
+            t.setUpdatesEnabled(True)
+
+    def _open_payment_for_customer(self, item: dict):
+        """Open payment dialog for customer's pending invoice directly from Dashboard."""
+        inv_id = item.get("primary_invoice_id")
+        if not inv_id:
+            from app.services import invoice_service
+            invoices = invoice_service.list_invoices_for_customer(item.get("customer_id"))
+            for inv in invoices:
+                if inv.status != "DRAFT":
+                    due = invoice_service.invoice_outstanding(inv)
+                    if due > 0.009:
+                        inv_id = inv.id
+                        break
+        if not inv_id:
+            QMessageBox.information(self, "No Pending Invoice", "No pending unpaid invoice found for this customer.")
+            return
+
+        from app.services import invoice_service
+        from app.ui.pages.payment_dialog import PaymentDialog
+        inv = invoice_service.get_invoice(inv_id)
+        if inv:
+            dlg = PaymentDialog(inv, self)
+            dlg.exec()
+            self.refresh()
+            if self.main_window and hasattr(self.main_window, "refresh_all"):
+                self.main_window.refresh_all()
 
     def _send_dashboard_whatsapp(self, customer_id: int):
         c = customer_service.get_customer(customer_id)

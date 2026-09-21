@@ -44,23 +44,16 @@ def dashboard_stats() -> dict:
         total_customers = session.query(func.count(Customer.id)).scalar() or 0
         total_invoices = session.query(func.count(Invoice.id)).scalar() or 0
 
-        total_income = session.query(
-            func.coalesce(func.sum(Payment.amount), 0)).scalar() or 0
-        today_income = session.query(
+        total_income = round(float(session.query(
+            func.coalesce(func.sum(Payment.amount), 0)).scalar() or 0), 2)
+        today_income = round(float(session.query(
             func.coalesce(func.sum(Payment.amount), 0)).filter(
-            Payment.date == today).scalar() or 0
-        monthly_income = session.query(
+            Payment.date == today).scalar() or 0), 2)
+        monthly_income = round(float(session.query(
             func.coalesce(func.sum(Payment.amount), 0)).filter(
-            Payment.date >= month_start).scalar() or 0
+            Payment.date >= month_start).scalar() or 0), 2)
 
-        total_billed = session.query(
-            func.coalesce(func.sum(Invoice.grand_total), 0)).filter(
-            Invoice.status != "DRAFT").scalar() or 0
-        total_outstanding = max(float(total_billed) - float(total_income), 0)
-
-        # --- Paid vs pending count (single JOIN query, no correlated subquery) ---
-        # LEFT JOIN + GROUP BY is faster than a correlated subquery for
-        # large datasets because SQLite can use a hash/group strategy.
+        # Paid vs pending rows & exact outstanding calculation
         paid_pending_rows = (
             session.query(
                 Invoice.id,
@@ -72,24 +65,26 @@ def dashboard_stats() -> dict:
             .group_by(Invoice.id)
             .all()
         )
+        total_billed = round(sum(float(r.grand_total or 0) for r in paid_pending_rows), 2)
+        total_outstanding = round(sum(max(float(r.grand_total or 0) - float(r.paid or 0), 0.0) for r in paid_pending_rows), 2)
         paid_count = sum(
             1 for r in paid_pending_rows
-            if float(r.paid or 0) >= float(r.grand_total or 0)
+            if float(r.paid or 0) >= float(r.grand_total or 0) - 0.009 and float(r.grand_total or 0) > 0
         )
         pending_count = len(paid_pending_rows) - paid_count
 
         result = {
             "total_customers": total_customers,
             "total_invoices": total_invoices,
-            "today_income": float(today_income),
-            "monthly_income": float(monthly_income),
-            "total_income": float(total_income),
+            "today_income": today_income,
+            "monthly_income": monthly_income,
+            "total_income": total_income,
+            "total_billed": total_billed,
             "total_outstanding": total_outstanding,
             "paid_invoices": paid_count,
             "pending_invoices": pending_count,
         }
-        # Cache for 60s — dashboard stats are aggregated and don't need instant freshness
-        cache.set("dashboard_stats", result, ttl=60)
+        cache.set("dashboard_stats", result, ttl=30)
         return result
     finally:
         session.close()
@@ -202,18 +197,29 @@ def top_pending_collections(limit: int = 5) -> list[dict]:
         for c in customers:
             total_invoiced = 0.0
             total_paid = 0.0
+            pending_invoices = []
             for inv in (c.invoices or []):
                 if inv.status != "DRAFT":
-                    total_invoiced += float(inv.grand_total or 0)
-                    for p in (inv.payments or []):
-                        total_paid += float(p.amount or 0)
-            bal = max(total_invoiced - total_paid, 0.0)
-            if bal > 0:
+                    i_tot = round(float(inv.grand_total or 0), 2)
+                    i_paid = round(sum(float(p.amount or 0) for p in (inv.payments or [])), 2)
+                    i_bal = round(max(i_tot - i_paid, 0.0), 2)
+                    total_invoiced += i_tot
+                    total_paid += i_paid
+                    if i_bal > 0.009:
+                        pending_invoices.append({
+                            "id": inv.id,
+                            "number": inv.invoice_number,
+                            "due": i_bal,
+                        })
+            bal = round(max(total_invoiced - total_paid, 0.0), 2)
+            if bal > 0.009:
                 results.append({
                     "customer_id": c.id,
                     "customer_name": c.name,
                     "mobile": c.mobile or "",
                     "outstanding": bal,
+                    "primary_invoice_id": pending_invoices[0]["id"] if pending_invoices else None,
+                    "primary_invoice_no": pending_invoices[0]["number"] if pending_invoices else None,
                 })
         results.sort(key=lambda x: x["outstanding"], reverse=True)
         return results[:limit]

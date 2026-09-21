@@ -13,7 +13,7 @@ from pathlib import Path
 def _base_dir() -> Path:
     """Return directory that contains the project files (source or frozen)."""
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
+        return Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
     return Path(__file__).resolve().parent.parent.parent
 
 
@@ -43,7 +43,12 @@ def backup_dir() -> Path:
 
 
 def resources_dir() -> Path:
-    return _base_dir() / "app" / "resources"
+    base = _base_dir()
+    if (base / "app" / "resources").exists():
+        return base / "app" / "resources"
+    if (base / "_internal" / "app" / "resources").exists():
+        return base / "_internal" / "app" / "resources"
+    return base / "app" / "resources"
 
 
 def icons_dir() -> Path:

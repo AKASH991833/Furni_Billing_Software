@@ -654,7 +654,7 @@ QTableWidget QLineEdit {{
     background: #FFFFFF;
     border: 1px solid #CBD5E1;
     border-radius: 6px;
-    padding: 4px 8px;
+    padding: 6px 8px;
     font-size: 13px;
     color: #0F172A;
     selection-background-color: {PRIMARY};

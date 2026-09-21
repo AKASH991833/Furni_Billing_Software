@@ -55,6 +55,8 @@ def init_db(db_file: Path | None = None) -> Engine:
         cursor.execute("PRAGMA foreign_keys=ON")
         # Reliability: 15s busy timeout avoids lock errors
         cursor.execute("PRAGMA busy_timeout=15000")
+        # Performance: multi-threaded query execution
+        cursor.execute("PRAGMA threads=4")
         # Performance: store user_version for lightweight migration checks
         cursor.execute("PRAGMA user_version=2")
         cursor.close()

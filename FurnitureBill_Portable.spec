@@ -1,8 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for the Furniture Bill desktop app (PyInstaller >= 6).
+"""PyInstaller spec for Single-File Standalone Portable EXE.
 
-Builds a high-performance, rock-solid --onedir application in dist/FurnitureBill/
-which Inno Setup packages into dist/FurnitureBill_Setup.exe.
+Builds a single, standalone .exe in dist/FurnitureBill_Portable.exe that
+runs directly on double-click with no installation required.
 """
 from pathlib import Path
 
@@ -11,25 +11,19 @@ a = Analysis(
     pathex=[str(Path.cwd())],
     binaries=[],
     datas=[
-        # Bundle the runtime assets (login background, icons, etc.)
         ('app/resources', 'app/resources'),
     ],
     hiddenimports=[
-        # Qt modules required by PDF generation, preview, printing & dashboard charts
         'PySide6.QtWebEngineCore',
         'PySide6.QtWebEngineWidgets',
         'PySide6.QtPrintSupport',
         'PySide6.QtCharts',
-        # Cryptography & licensing verification
         'cryptography.hazmat.primitives.asymmetric.ed25519',
         'cryptography.hazmat.primitives.serialization',
-        # SQLite & Database
         'sqlalchemy.dialects.sqlite',
-        # QR Code & Image processing
         'qrcode',
         'PIL',
         'PIL.Image',
-        # Excel reporting
         'openpyxl',
         'openpyxl.chart',
         'openpyxl.styles',
@@ -42,10 +36,8 @@ a = Analysis(
         'matplotlib',
         'pytest',
         'license_server',
-        # Not used by Furniture Bill app — removing avoids bundling unsigned DLLs
         'psycopg2',
         'numpy',
-        # Qt modules not needed
         'PySide6.QtBluetooth',
         'PySide6.QtSensors',
         'PySide6.QtNfc',
@@ -66,29 +58,22 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
     [],
-    exclude_binaries=True,
-    name='FurnitureBill',
+    name='FurnitureBill_Portable',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=False,
-    icon='app/resources/icons/app.ico',
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-)
-
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    name='FurnitureBill',
+    icon='app/resources/icons/app.ico',
 )

@@ -52,6 +52,14 @@ class TestUIImports:
         from app.ui.pages.invoice_editor import InvoiceEditor
         assert InvoiceEditor is not None
 
+    def test_dashboard_page_render_and_refresh(self):
+        from PySide6.QtWidgets import QApplication
+        from app.ui.pages.dashboard_page import DashboardPage
+        _app = QApplication.instance() or QApplication([])
+        page = DashboardPage()
+        page.refresh()
+        assert page.pending_collections_table is not None
+
 
 class TestDarkModeRemoval:
     """Verify dark mode files are completely removed."""

@@ -544,79 +544,135 @@ class AdjustmentDialog(QDialog):
 # ===========================================================================
 
 class SettlementDialog(QDialog):
-    """Dialog to confirm and record monthly settlement payment."""
+    """Dialog to confirm and record settlement / full payment done up to cutoff date."""
 
-    def __init__(self, parent=None, summary=None):
+    def __init__(self, parent=None, summary=None, worker_id: int | None = None):
         super().__init__(parent)
         self.summary = summary or {}
-        self.setWindowTitle("Settle Month & Record Payment")
-        self.setMinimumWidth(440)
-        self.resize(460, 420)
+        self.worker_id = worker_id or self.summary.get("worker_id")
+        worker_name = self.summary.get("name", "Worker")
+
+        self.setWindowTitle(f"Confirm Payment Done — {worker_name}")
+        self.setMinimumWidth(480)
+        self.resize(510, 530)
 
         v = QVBoxLayout(self)
-        v.setContentsMargins(20, 20, 20, 20)
-        v.setSpacing(14)
+        v.setContentsMargins(20, 18, 20, 18)
+        v.setSpacing(12)
 
-        title = QLabel(f"💰 Settle Month — {self.summary.get('name', 'Worker')}")
+        # Title & Description
+        title = QLabel(f"💰 Confirm Payment Done — {worker_name}")
         title.setStyleSheet("font-size: 16px; font-weight: 800; color: #173560;")
         v.addWidget(title)
 
-        # Overview Card
-        box = QFrame()
-        box.setStyleSheet("background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 8px; padding: 12px;")
-        b_lay = QGridLayout(box)
-        b_lay.setVerticalSpacing(6)
+        sub_lbl = QLabel("All attendance and advances up to the cutoff date will be marked as settled.")
+        sub_lbl.setStyleSheet("font-size: 11px; color: #64748B;")
+        v.addWidget(sub_lbl)
 
-        def _row(row_idx, label, val_str, color="#0F172A", bold=False):
-            l = QLabel(label)
-            l.setStyleSheet(f"font-size: 12px; color: #475569; {'font-weight:700;' if bold else ''}")
-            vl = QLabel(val_str)
-            vl.setAlignment(Qt.AlignRight)
-            vl.setStyleSheet(f"font-size: 12px; color: {color}; {'font-weight:800;' if bold else 'font-weight:600;'}")
-            b_lay.addWidget(l, row_idx, 0)
-            b_lay.addWidget(vl, row_idx, 1)
-
-        _row(0, "Month:", f"{self.summary.get('month_name', '')} {self.summary.get('year', '')}")
-        _row(1, "Total Work Earnings:", _money(self.summary.get("total_work_earning", 0)))
-        _row(2, "(+) Travel Expenses:", f"+ {_money(self.summary.get('total_travel', 0))}", color="#059669")
-        _row(3, "(+) Other Additions:", f"+ {_money(self.summary.get('total_additions', 0))}", color="#059669")
-        _row(4, "Gross Payable:", _money(self.summary.get("gross_payable", 0)), bold=True)
-        _row(5, "(-) Advance Payments:", f"- {_money(self.summary.get('total_advance', 0))}", color="#DC2626")
-        _row(6, "(-) Other Deductions:", f"- {_money(self.summary.get('total_deductions', 0))}", color="#DC2626")
-
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet("color: #94A3B8;")
-        b_lay.addWidget(line, 7, 0, 1, 2)
-
-        _row(8, "NET PAYABLE:", _money(self.summary.get("net_payable", 0)), color="#173560", bold=True)
-        v.addWidget(box)
-
-        form = QFormLayout()
-        form.setVerticalSpacing(10)
+        # Cutoff Date Row
+        top_form = QFormLayout()
+        top_form.setVerticalSpacing(8)
 
         def _lab(t):
             l = QLabel(t)
-            l.setStyleSheet("font-size: 11px; font-weight: 700; color: #475569;")
+            l.setStyleSheet("font-size: 11px; font-weight: 700; color: #334155;")
             return l
 
-        net_val = float(self.summary.get("net_payable", 0))
+        self.f_end_date = QDateEdit()
+        self.f_end_date.setCalendarPopup(True)
+        self.f_end_date.setDisplayFormat("dd MMM yyyy")
+
+        today = date.today()
+        s_year = self.summary.get("year", today.year)
+        s_month = self.summary.get("month", today.month)
+        if s_year == today.year and s_month == today.month:
+            init_d = today
+        else:
+            _, last_day = calendar.monthrange(s_year, s_month)
+            init_d = date(s_year, s_month, last_day)
+
+        self.f_end_date.setDate(QDate(init_d.year, init_d.month, init_d.day))
+        self.f_end_date.setStyleSheet("""
+            QDateEdit {
+                font-size: 12px; font-weight: 700; padding: 6px 10px;
+                border: 1.5px solid #CBD5E1; border-radius: 6px; background: #FFFFFF; color: #0F172A;
+            }
+        """)
+        self.f_end_date.dateChanged.connect(self._on_cutoff_date_changed)
+        top_form.addRow(_lab("Payment Cutoff Date *"), self.f_end_date)
+        v.addLayout(top_form)
+
+        # Dynamic Overview Box
+        self.box = QFrame()
+        self.box.setObjectName("settleOverviewBox")
+        self.box.setStyleSheet("""
+            QFrame#settleOverviewBox {
+                background: #F8FAFC; border: 1.5px solid #CBD5E1; border-radius: 8px; padding: 12px;
+            }
+            QFrame#settleOverviewBox QLabel {
+                border: none; background: transparent;
+            }
+        """)
+        self.b_lay = QGridLayout(self.box)
+        self.b_lay.setVerticalSpacing(5)
+
+        self.lbl_row_period = QLabel("—")
+        self.lbl_row_units = QLabel("—")
+        self.lbl_row_earn = QLabel("—")
+        self.lbl_row_travel = QLabel("—")
+        self.lbl_row_add = QLabel("—")
+        self.lbl_row_gross = QLabel("—")
+        self.lbl_row_adv = QLabel("—")
+        self.lbl_row_ded = QLabel("—")
+        self.lbl_row_net = QLabel("—")
+
+        def _row_w(row_idx, label, val_widget, color="#0F172A", bold=False):
+            l = QLabel(label)
+            l.setStyleSheet(f"font-size: 11.5px; color: #475569; {'font-weight:700;' if bold else ''}")
+            val_widget.setAlignment(Qt.AlignRight)
+            val_widget.setStyleSheet(f"font-size: 12px; color: {color}; {'font-weight:800;' if bold else 'font-weight:600;'}")
+            self.b_lay.addWidget(l, row_idx, 0)
+            self.b_lay.addWidget(val_widget, row_idx, 1)
+
+        _row_w(0, "Settlement Period:", self.lbl_row_period, color="#1E40AF", bold=True)
+        _row_w(1, "Days Worked:", self.lbl_row_units, bold=True)
+        _row_w(2, "Base Work Earnings:", self.lbl_row_earn)
+        _row_w(3, "(+) Travel / Rickshaw:", self.lbl_row_travel, color="#059669")
+        _row_w(4, "(+) Other Additions:", self.lbl_row_add, color="#059669")
+        _row_w(5, "Gross Payable:", self.lbl_row_gross, bold=True)
+        _row_w(6, "(-) Advance Payments:", self.lbl_row_adv, color="#DC2626")
+        _row_w(7, "(-) Other Deductions:", self.lbl_row_ded, color="#DC2626")
+
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setStyleSheet("color: #CBD5E1;")
+        self.b_lay.addWidget(line, 8, 0, 1, 2)
+
+        _row_w(9, "CYCLE NET PAYABLE:", self.lbl_row_net, color="#173560", bold=True)
+        v.addWidget(self.box)
+
+        # Bottom Payment Inputs
+        form = QFormLayout()
+        form.setVerticalSpacing(8)
+
         self.f_amount = QDoubleSpinBox()
         self.f_amount.setRange(0, 1000000)
         self.f_amount.setPrefix("₹ ")
-        self.f_amount.setValue(max(0.0, net_val))
+        self.f_amount.setStyleSheet("font-size: 13px; font-weight: 800; padding: 6px; color: #059669;")
 
         self.f_method = QComboBox()
         self.f_method.addItems(["Cash", "UPI", "Bank", "Other"])
+        self.f_method.setStyleSheet("font-size: 12px; padding: 5px;")
 
         self.f_notes = QLineEdit()
-        self.f_notes.setText(f"Final settlement for {self.summary.get('month_name', '')} {self.summary.get('year', '')}")
+        self.f_notes.setStyleSheet("font-size: 12px; padding: 5px;")
 
-        form.addRow(_lab("Payment Amount *"), self.f_amount)
+        form.addRow(_lab("Confirm Paid Amount *"), self.f_amount)
         form.addRow(_lab("Payment Method"), self.f_method)
-        form.addRow(_lab("Notes"), self.f_notes)
+        form.addRow(_lab("Notes / Remarks"), self.f_notes)
         v.addLayout(form)
 
+        # Dialog Buttons
         btns = QHBoxLayout()
         btns.addStretch(1)
         cancel = QPushButton("Cancel")
@@ -626,11 +682,11 @@ class SettlementDialog(QDialog):
         )
         cancel.clicked.connect(self.reject)
 
-        save = QPushButton("Confirm Settlement")
+        save = QPushButton("✓ Confirm Payment Done")
         save.setStyleSheet(
-            "QPushButton { background: #173560; color: #FFFFFF; font-weight: 700; "
-            "border: none; border-radius: 6px; padding: 7px 20px; font-size: 12px; } "
-            "QPushButton:hover { background: #0F2342; }"
+            "QPushButton { background: #059669; color: #FFFFFF; font-weight: 800; "
+            "border: none; border-radius: 6px; padding: 8px 22px; font-size: 12px; } "
+            "QPushButton:hover { background: #047857; }"
         )
         save.clicked.connect(self._save)
 
@@ -638,8 +694,52 @@ class SettlementDialog(QDialog):
         btns.addWidget(save)
         v.addLayout(btns)
 
+        # Initial calculation
+        self._current_cycle = {}
+        self._recalculate_cycle()
+
+    def _on_cutoff_date_changed(self):
+        self._recalculate_cycle()
+
+    def _recalculate_cycle(self):
+        qd = self.f_end_date.date()
+        cutoff_d = date(qd.year(), qd.month(), qd.day())
+        if self.worker_id:
+            cycle = worker_service.get_worker_active_cycle(self.worker_id, up_to_date=cutoff_d)
+            self._current_cycle = cycle
+            self.lbl_row_period.setText(cycle.get("period_label", "—"))
+            self.lbl_row_units.setText(f"{cycle.get('total_units', 0.0):.1f} Days")
+            self.lbl_row_earn.setText(_money(cycle.get("total_work_earning", 0.0)))
+            self.lbl_row_travel.setText(f"+ {_money(cycle.get('total_travel', 0.0))}")
+            self.lbl_row_add.setText(f"+ {_money(cycle.get('total_additions', 0.0))}")
+            self.lbl_row_gross.setText(_money(cycle.get("gross_payable", 0.0)))
+            self.lbl_row_adv.setText(f"- {_money(cycle.get('total_advances', 0.0))}")
+            self.lbl_row_ded.setText(f"- {_money(cycle.get('total_deductions', 0.0))}")
+            net = cycle.get("net_payable", 0.0)
+            self.lbl_row_net.setText(_money(net))
+            self.f_amount.setValue(max(0.0, float(net)))
+            self.f_notes.setText(f"Payment Done up to {cutoff_d.strftime('%d %b %Y')}")
+        else:
+            self.lbl_row_period.setText(f"{self.summary.get('month_name', '')} {self.summary.get('year', '')}")
+            self.lbl_row_units.setText(f"{self.summary.get('total_units', 0.0):.1f} Days")
+            self.lbl_row_earn.setText(_money(self.summary.get("total_work_earning", 0.0)))
+            self.lbl_row_travel.setText(f"+ {_money(self.summary.get('total_travel', 0.0))}")
+            self.lbl_row_add.setText(f"+ {_money(self.summary.get('total_additions', 0.0))}")
+            self.lbl_row_gross.setText(_money(self.summary.get("gross_payable", 0.0)))
+            self.lbl_row_adv.setText(f"- {_money(self.summary.get('total_advance', 0.0))}")
+            self.lbl_row_ded.setText(f"- {_money(self.summary.get('total_deductions', 0.0))}")
+            net = self.summary.get("net_payable", 0.0)
+            self.lbl_row_net.setText(_money(net))
+            self.f_amount.setValue(max(0.0, float(net)))
+            self.f_notes.setText(f"Final settlement for {self.summary.get('month_name', '')} {self.summary.get('year', '')}")
+
     def _save(self):
+        qd = self.f_end_date.date()
+        cutoff_d = date(qd.year(), qd.month(), qd.day())
+        st_d = self._current_cycle.get("start_date")
         self._data = {
+            "start_date": st_d,
+            "end_date": cutoff_d,
             "paid_amount": self.f_amount.value(),
             "method": self.f_method.currentText(),
             "notes": self.f_notes.text().strip(),
@@ -648,6 +748,7 @@ class SettlementDialog(QDialog):
 
     def get_data(self) -> dict:
         return getattr(self, "_data", {})
+
 
 
 # ===========================================================================
@@ -1159,16 +1260,21 @@ class DailyRecordEditDialog(QDialog):
         trv_card = QFrame()
         trv_card.setStyleSheet("background:#ECFDF5; border:1px solid #A7F3D0; border-radius:8px; padding:10px 12px;")
         tc = QVBoxLayout(trv_card)
-        tc.setContentsMargins(0,0,0,0); tc.setSpacing(6)
-        tc.addWidget(QLabel("Travel / Rickshaw Expense (optional)"))
-        tc.children()[0].widget().setStyleSheet("font-size:11px;font-weight:800;color:#059669;")
+        tc.setContentsMargins(0, 0, 0, 0)
+        tc.setSpacing(6)
+        lbl_trv = QLabel("Travel / Rickshaw Expense (optional)")
+        lbl_trv.setStyleSheet("font-size:11px; font-weight:800; color:#059669;")
+        tc.addWidget(lbl_trv)
 
-        trv_row = QHBoxLayout(); trv_row.setSpacing(8)
+        trv_row = QHBoxLayout()
+        trv_row.setSpacing(8)
         self.f_trv = QDoubleSpinBox()
-        self.f_trv.setRange(0, 100000); self.f_trv.setPrefix("Rs. ")
+        self.f_trv.setRange(0, 100000)
+        self.f_trv.setPrefix("Rs. ")
         self.f_trv.setValue(self.existing.get("travel_amount", 0.0))
         trv_row.addWidget(self.f_trv, 2)
-        self.f_trv_cat = QComboBox(); self.f_trv_cat.setEditable(True)
+        self.f_trv_cat = QComboBox()
+        self.f_trv_cat.setEditable(True)
         self.f_trv_cat.addItems(["Rickshaw", "Travel", "Bus", "Site travel", "Other"])
         trv_row.addWidget(self.f_trv_cat, 2)
         self.f_trv_note = QLineEdit(self.existing.get("travel_notes", ""))
@@ -1181,13 +1287,17 @@ class DailyRecordEditDialog(QDialog):
         adv_card = QFrame()
         adv_card.setStyleSheet("background:#FEF2F2; border:1px solid #FECACA; border-radius:8px; padding:10px 12px;")
         ac = QVBoxLayout(adv_card)
-        ac.setContentsMargins(0,0,0,0); ac.setSpacing(6)
-        ac.addWidget(QLabel("Advance Payment (optional)"))
-        ac.children()[0].widget().setStyleSheet("font-size:11px;font-weight:800;color:#DC2626;")
+        ac.setContentsMargins(0, 0, 0, 0)
+        ac.setSpacing(6)
+        lbl_adv = QLabel("Advance Payment (optional)")
+        lbl_adv.setStyleSheet("font-size:11px; font-weight:800; color:#DC2626;")
+        ac.addWidget(lbl_adv)
 
-        adv_row = QHBoxLayout(); adv_row.setSpacing(8)
+        adv_row = QHBoxLayout()
+        adv_row.setSpacing(8)
         self.f_adv = QDoubleSpinBox()
-        self.f_adv.setRange(0, 1000000); self.f_adv.setPrefix("Rs. ")
+        self.f_adv.setRange(0, 1000000)
+        self.f_adv.setPrefix("Rs. ")
         self.f_adv.setValue(0.0)
         adv_row.addWidget(self.f_adv, 2)
         self.f_adv_method = QComboBox()
@@ -1455,6 +1565,19 @@ class WorkersPage(BasePage):
         self.setObjectName("workersPage")
         self._build_ui()
 
+    @staticmethod
+    def _clear_table_widgets(tbl: QTableWidget):
+        """Safely remove and delete all child cell widgets to avoid orphan widgets on the viewport."""
+        tbl.clearSpans()
+        for r in range(tbl.rowCount()):
+            for c in range(tbl.columnCount()):
+                cw = tbl.cellWidget(r, c)
+                if cw:
+                    tbl.removeCellWidget(r, c)
+                    cw.setParent(None)
+                    cw.deleteLater()
+        tbl.clearContents()
+
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 20)
@@ -1478,11 +1601,13 @@ class WorkersPage(BasePage):
         self.tab_attendance = self._build_attendance_tab()
         self.tab_history = self._build_history_tab()
         self.tab_settlement = self._build_settlement_tab()
+        self.tab_pdone = self._build_payment_done_tab()
 
         self.tabs.addTab(self.tab_directory, "👥 Worker List")
         self.tabs.addTab(self.tab_attendance, "⚡ Daily Attendance")
         self.tabs.addTab(self.tab_history, "📋 Monthly History")
-        self.tabs.addTab(self.tab_settlement, "💵 Payments & Settlement")
+        self.tabs.addTab(self.tab_settlement, "💵 Payments && Settlement")
+        self.tabs.addTab(self.tab_pdone, "✅ Payment Done")
 
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, 1)
@@ -1650,10 +1775,11 @@ class WorkersPage(BasePage):
 
         self.att_date_edit = QDateEdit()
         self.att_date_edit.setCalendarPopup(True)
+        self.att_date_edit.setDisplayFormat("dd MMM yyyy")
         self.att_date_edit.setDate(QDate.currentDate())
         self.att_date_edit.setMaximumDate(QDate.currentDate())  # Cannot go to future
         self.att_date_edit.dateChanged.connect(self._load_daily_attendance_data)
-        self.att_date_edit.setStyleSheet("font-size: 12px; font-weight: 700; padding: 4px 8px;")
+        self.att_date_edit.setStyleSheet("font-size: 12px; font-weight: 700; padding: 4px 8px; min-width: 110px;")
         tb.addWidget(self.att_date_edit)
 
         self.btn_att_next = QPushButton("Next ▶")
@@ -1714,7 +1840,7 @@ class WorkersPage(BasePage):
         self.table_att.setColumnWidth(0, 60)
         self.table_att.setColumnWidth(2, 120)
         self.table_att.setColumnWidth(3, 130)
-        self.table_att.setColumnWidth(4, 380)
+        self.table_att.setColumnWidth(4, 490)
 
         self.table_att.verticalHeader().setVisible(False)
         self.table_att.verticalHeader().setDefaultSectionSize(44)
@@ -1764,6 +1890,10 @@ class WorkersPage(BasePage):
         self.cb_hist_year.currentIndexChanged.connect(self._load_monthly_history_data)
         tb.addWidget(self.cb_hist_year)
 
+        self.lbl_hist_settle_badge = QLabel("")
+        self.lbl_hist_settle_badge.setVisible(False)
+        tb.addWidget(self.lbl_hist_settle_badge)
+
         tb.addStretch(1)
 
         btn_add_haaziri = QPushButton("+ Add Attendance")
@@ -1811,7 +1941,7 @@ class WorkersPage(BasePage):
         self.table_hist.setColumnWidth(4, 110)
         self.table_hist.setColumnWidth(5, 120)
         self.table_hist.setColumnWidth(6, 120)
-        self.table_hist.setColumnWidth(8, 80)
+        self.table_hist.setColumnWidth(8, 115)
 
         self.table_hist.verticalHeader().setVisible(False)
         self.table_hist.verticalHeader().setDefaultSectionSize(40)
@@ -1883,11 +2013,11 @@ class WorkersPage(BasePage):
         l_net = QHBoxLayout(self.f_hf_net)
         l_net.setContentsMargins(0, 0, 0, 0)
         l_net.setSpacing(8)
-        lbl_net_title = QLabel("FINAL NET PAYABLE:")
-        lbl_net_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #F59E0B; letter-spacing: 0.5px;")
+        self.lbl_hist_net_title = QLabel("FINAL NET PAYABLE:")
+        self.lbl_hist_net_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #F59E0B; letter-spacing: 0.5px;")
         self.lbl_hf_net = QLabel("₹ 0.00")
         self.lbl_hf_net.setStyleSheet("font-size: 14px; font-weight: 900; color: #FFFFFF;")
-        l_net.addWidget(lbl_net_title)
+        l_net.addWidget(self.lbl_hist_net_title)
         l_net.addWidget(self.lbl_hf_net)
 
         row2.addWidget(self.f_hf_earning)
@@ -1900,7 +2030,6 @@ class WorkersPage(BasePage):
         lay.addWidget(self.hist_footer)
 
         return w
-
     # -------------------------------------------------------------------------
     # Tab 4: Payments, Advances & Settlement
     # -------------------------------------------------------------------------
@@ -1910,18 +2039,36 @@ class WorkersPage(BasePage):
         lay.setContentsMargins(16, 16, 16, 16)
         lay.setSpacing(12)
 
-        # Toolbar
+        # ── Toolbar ──────────────────────────────────────────────────────────
         tb = QHBoxLayout()
-        tb.setSpacing(10)
+        tb.setSpacing(12)
 
-        tb.addWidget(QLabel("Select Worker:"))
+        lbl_w = QLabel("Select Worker:")
+        lbl_w.setStyleSheet("font-size: 12px; font-weight: 700; color: #334155;")
+        tb.addWidget(lbl_w)
         self.cb_pay_worker = QComboBox()
-        self.cb_pay_worker.setFixedWidth(240)
+        self.cb_pay_worker.setFixedWidth(260)
+        self.cb_pay_worker.setStyleSheet("""
+            QComboBox {
+                font-size: 12px; font-weight: 600; padding: 6px 12px;
+                border: 1px solid #CBD5E1; border-radius: 6px; background: #FFFFFF; color: #0F172A;
+            }
+            QComboBox:hover { border: 1px solid #94A3B8; }
+            QComboBox::drop-down { border: none; padding-right: 8px; }
+        """)
         self.cb_pay_worker.currentIndexChanged.connect(self._load_settlement_data)
         tb.addWidget(self.cb_pay_worker)
 
-        tb.addWidget(QLabel("Month & Year:"))
+        lbl_m = QLabel("Month & Year:")
+        lbl_m.setStyleSheet("font-size: 12px; font-weight: 700; color: #334155;")
+        tb.addWidget(lbl_m)
         self.cb_pay_month = QComboBox()
+        self.cb_pay_month.setStyleSheet("""
+            QComboBox {
+                font-size: 12px; font-weight: 600; padding: 6px 12px;
+                border: 1px solid #CBD5E1; border-radius: 6px; background: #FFFFFF; color: #0F172A;
+            }
+        """)
         for m in range(1, 13):
             self.cb_pay_month.addItem(calendar.month_name[m], m)
         self.cb_pay_month.setCurrentIndex(date.today().month - 1)
@@ -1929,6 +2076,12 @@ class WorkersPage(BasePage):
         tb.addWidget(self.cb_pay_month)
 
         self.cb_pay_year = QComboBox()
+        self.cb_pay_year.setStyleSheet("""
+            QComboBox {
+                font-size: 12px; font-weight: 600; padding: 6px 12px;
+                border: 1px solid #CBD5E1; border-radius: 6px; background: #FFFFFF; color: #0F172A;
+            }
+        """)
         cur_year = date.today().year
         for y in range(cur_year - 2, cur_year + 3):
             self.cb_pay_year.addItem(str(y), y)
@@ -1938,128 +2091,1038 @@ class WorkersPage(BasePage):
 
         tb.addStretch(1)
 
-        btn_add_adv = QPushButton("💵 + Advance")
-        btn_add_adv.setCursor(Qt.PointingHandCursor)
-        btn_add_adv.setStyleSheet("background: #DC2626; color: white; font-weight: 700; border-radius: 4px; padding: 6px 12px; font-size: 11px;")
+        def _tb_btn(text: str, bg: str, hover: str):
+            b = QPushButton(text)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setStyleSheet(f"""
+                QPushButton {{
+                    background: {bg}; color: #FFFFFF; font-weight: 700;
+                    border-radius: 6px; padding: 7px 15px; font-size: 11px; border: none;
+                }}
+                QPushButton:hover {{ background: {hover}; }}
+            """)
+            return b
+
+        btn_add_adv = _tb_btn("+ Advance", "#DC2626", "#B91C1C")
+        btn_add_adv.setToolTip("Record a cash or UPI advance payment given to worker")
         btn_add_adv.clicked.connect(self._open_advance_dialog)
         tb.addWidget(btn_add_adv)
 
-        btn_add_exp = QPushButton("🛵 + Travel")
-        btn_add_exp.setCursor(Qt.PointingHandCursor)
-        btn_add_exp.setStyleSheet("background: #059669; color: white; font-weight: 700; border-radius: 4px; padding: 6px 12px; font-size: 11px;")
+        btn_add_exp = _tb_btn("+ Travel", "#059669", "#047857")
+        btn_add_exp.setToolTip("Record rickshaw, bus, or travel expenses for site work")
         btn_add_exp.clicked.connect(self._open_travel_dialog)
         tb.addWidget(btn_add_exp)
 
-        btn_add_adj = QPushButton("⚖ + Adjustment")
-        btn_add_adj.setCursor(Qt.PointingHandCursor)
-        btn_add_adj.setStyleSheet("background: #173560; color: white; font-weight: 700; border-radius: 4px; padding: 6px 12px; font-size: 11px;")
+        btn_add_adj = _tb_btn("+ Adjustment", "#173560", "#0F2342")
+        btn_add_adj.setToolTip("Record special bonus addition or penalty deduction")
         btn_add_adj.clicked.connect(self._open_adjustment_dialog)
         tb.addWidget(btn_add_adj)
 
         lay.addLayout(tb)
 
-        # Splitter: Left (Transactions Tables) vs Right (Settlement Card)
+        # ── Splitter: Left (Transactions Tables) | Right (Settlement Card) ───
         split = QSplitter(Qt.Horizontal)
         split.setHandleWidth(8)
+        split.setStyleSheet("""
+            QSplitter::handle {
+                background: #E2E8F0;
+                border-radius: 4px;
+                margin: 2px;
+            }
+            QSplitter::handle:hover {
+                background: #94A3B8;
+            }
+        """)
 
-        # Left: Transactions Tabs
+        # ── LEFT PANE: Transaction Sub-Tabs ──────────────────────────────────
         left_box = QWidget()
         lb_lay = QVBoxLayout(left_box)
-        lb_lay.setContentsMargins(0, 0, 0, 0)
-        lb_lay.setSpacing(8)
+        lb_lay.setContentsMargins(0, 0, 6, 0)
+        lb_lay.setSpacing(0)
 
         self.trans_subtabs = QTabWidget()
-        self.trans_subtabs.setStyleSheet("QTabWidget::pane { border: 1px solid #CBD5E1; border-radius: 6px; }")
+        self.trans_subtabs.setStyleSheet("""
+            QTabWidget::pane {
+                border: 1.5px solid #CBD5E1;
+                border-radius: 0 8px 8px 8px;
+                background: #FFFFFF;
+            }
+            QTabBar::tab {
+                background: #F8FAFC;
+                color: #475569;
+                font-weight: 700;
+                font-size: 11px;
+                padding: 8px 12px;
+                border: 1px solid #CBD5E1;
+                border-bottom: none;
+                border-radius: 6px 6px 0 0;
+                margin-right: 2px;
+            }
+            QTabBar::tab:selected {
+                background: #FFFFFF;
+                color: #173560;
+                font-weight: 800;
+                border-top: 2px solid #173560;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #EDF2F7;
+                color: #173560;
+            }
+        """)
 
-        self.table_advances = self._make_sub_table(["Date", "Amount", "Method", "Notes", "Action"])
-        self.table_travel = self._make_sub_table(["Date", "Amount", "Category", "Notes", "Action"])
-        self.table_adjustments = self._make_sub_table(["Date", "Type", "Category", "Amount", "Notes", "Action"])
+        # Tab 1: Advances Given
+        tab_adv_widget = QWidget()
+        t1_lay = QVBoxLayout(tab_adv_widget)
+        t1_lay.setContentsMargins(10, 10, 10, 10)
+        t1_lay.setSpacing(8)
 
-        self.trans_subtabs.addTab(self.table_advances, "Advances Given (-)")
-        self.trans_subtabs.addTab(self.table_travel, "Travel / Rickshaw (+)")
-        self.trans_subtabs.addTab(self.table_adjustments, "Other Additions & Deductions")
+        t1_hdr = QHBoxLayout()
+        self.lbl_subtab_adv_total = QLabel("Total Advances: ₹ 0.00")
+        self.lbl_subtab_adv_total.setStyleSheet("""
+            background: #FEF2F2; color: #DC2626; font-size: 11px; font-weight: 800;
+            padding: 4px 10px; border-radius: 4px; border: 1px solid #FECACA;
+        """)
+        t1_hdr.addWidget(self.lbl_subtab_adv_total)
+        t1_hdr.addStretch(1)
+        btn_adv_fast = QPushButton("+ Record Advance")
+        btn_adv_fast.setCursor(Qt.PointingHandCursor)
+        btn_adv_fast.setStyleSheet("""
+            QPushButton {
+                background: #DC2626; color: white; font-weight: 700; font-size: 10px;
+                border-radius: 4px; padding: 4px 10px; border: none;
+            }
+            QPushButton:hover { background: #B91C1C; }
+        """)
+        btn_adv_fast.clicked.connect(self._open_advance_dialog)
+        t1_hdr.addWidget(btn_adv_fast)
+        t1_lay.addLayout(t1_hdr)
+
+        self.table_advances = self._make_sub_table(["Date", "Amount", "Method", "Notes / Purpose", "Action"], is_adj=False)
+        t1_lay.addWidget(self.table_advances, 1)
+        self.trans_subtabs.addTab(tab_adv_widget, "💵 Advances Given (-)")
+
+        # Tab 2: Travel Expenses
+        tab_trv_widget = QWidget()
+        t2_lay = QVBoxLayout(tab_trv_widget)
+        t2_lay.setContentsMargins(10, 10, 10, 10)
+        t2_lay.setSpacing(8)
+
+        t2_hdr = QHBoxLayout()
+        self.lbl_subtab_trv_total = QLabel("Total Travel: ₹ 0.00")
+        self.lbl_subtab_trv_total.setStyleSheet("""
+            background: #ECFDF5; color: #059669; font-size: 11px; font-weight: 800;
+            padding: 4px 10px; border-radius: 4px; border: 1px solid #A7F3D0;
+        """)
+        t2_hdr.addWidget(self.lbl_subtab_trv_total)
+        t2_hdr.addStretch(1)
+        btn_trv_fast = QPushButton("+ Record Travel")
+        btn_trv_fast.setCursor(Qt.PointingHandCursor)
+        btn_trv_fast.setStyleSheet("""
+            QPushButton {
+                background: #059669; color: white; font-weight: 700; font-size: 10px;
+                border-radius: 4px; padding: 4px 10px; border: none;
+            }
+            QPushButton:hover { background: #047857; }
+        """)
+        btn_trv_fast.clicked.connect(self._open_travel_dialog)
+        t2_hdr.addWidget(btn_trv_fast)
+        t2_lay.addLayout(t2_hdr)
+
+        self.table_travel = self._make_sub_table(["Date", "Amount", "Category", "Route / Notes", "Action"], is_adj=False)
+        t2_lay.addWidget(self.table_travel, 1)
+        self.trans_subtabs.addTab(tab_trv_widget, "🛵 Travel / Rickshaw (+)")
+
+        # Tab 3: Adjustments
+        tab_adj_widget = QWidget()
+        t3_lay = QVBoxLayout(tab_adj_widget)
+        t3_lay.setContentsMargins(10, 10, 10, 10)
+        t3_lay.setSpacing(8)
+
+        t3_hdr = QHBoxLayout()
+        self.lbl_subtab_adj_total = QLabel("Net Adjustments: ₹ 0.00")
+        self.lbl_subtab_adj_total.setStyleSheet("""
+            background: #EFF6FF; color: #1E40AF; font-size: 11px; font-weight: 800;
+            padding: 4px 10px; border-radius: 4px; border: 1px solid #BFDBFE;
+        """)
+        t3_hdr.addWidget(self.lbl_subtab_adj_total)
+        t3_hdr.addStretch(1)
+        btn_adj_fast = QPushButton("+ Add Adjustment")
+        btn_adj_fast.setCursor(Qt.PointingHandCursor)
+        btn_adj_fast.setStyleSheet("""
+            QPushButton {
+                background: #173560; color: white; font-weight: 700; font-size: 10px;
+                border-radius: 4px; padding: 4px 10px; border: none;
+            }
+            QPushButton:hover { background: #0F2342; }
+        """)
+        btn_adj_fast.clicked.connect(self._open_adjustment_dialog)
+        t3_hdr.addWidget(btn_adj_fast)
+        t3_lay.addLayout(t3_hdr)
+
+        self.table_adjustments = self._make_sub_table(["Date", "Type", "Category", "Amount", "Reason / Notes", "Action"], is_adj=True)
+        t3_lay.addWidget(self.table_adjustments, 1)
+        self.trans_subtabs.addTab(tab_adj_widget, "⚖ Other Additions && Deductions")
+
+        # Tab 4: Past Settlement History
+        tab_shist_widget = QWidget()
+        t4_lay = QVBoxLayout(tab_shist_widget)
+        t4_lay.setContentsMargins(10, 10, 10, 10)
+        t4_lay.setSpacing(8)
+
+        t4_hdr = QHBoxLayout()
+        self.lbl_subtab_shist_total = QLabel("All Recorded Settlements for Selected Worker")
+        self.lbl_subtab_shist_total.setStyleSheet("""
+            background: #F0FDF4; color: #166534; font-size: 11px; font-weight: 800;
+            padding: 4px 10px; border-radius: 4px; border: 1px solid #BBF7D0;
+        """)
+        t4_hdr.addWidget(self.lbl_subtab_shist_total)
+        t4_hdr.addStretch(1)
+        t4_lay.addLayout(t4_hdr)
+
+        self.table_settle_hist = self._make_sub_table(
+            ["Month", "Days", "Earnings", "Advances", "Paid Amount", "Paid Date", "Mode", "Status"],
+            is_adj=False
+        )
+        t4_lay.addWidget(self.table_settle_hist, 1)
+        self.trans_subtabs.addTab(tab_shist_widget, "📜 Settlement History")
 
         lb_lay.addWidget(self.trans_subtabs)
         split.addWidget(left_box)
 
-        # Right: Settlement Card
-        right_box = QWidget()
-        rb_lay = QVBoxLayout(right_box)
-        rb_lay.setContentsMargins(0, 0, 0, 0)
+        # ── RIGHT PANE: Executive Settlement Statement Card ──────────────────
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        right_scroll.setFrameShape(QFrame.NoFrame)
+        right_scroll.setStyleSheet("""
+            QScrollArea { background: transparent; border: none; }
+            QScrollBar:vertical {
+                width: 6px; background: transparent; border-radius: 3px;
+            }
+            QScrollBar::handle:vertical {
+                background: #CBD5E1; border-radius: 3px; min-height: 24px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #94A3B8;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
 
-        self.settlement_card = QFrame()
-        self.settlement_card.setStyleSheet("background: #F8FAFC; border: 2px solid #CBD5E1; border-radius: 8px; padding: 14px;")
-        sc_lay = QGridLayout(self.settlement_card)
-        sc_lay.setVerticalSpacing(8)
+        right_card = QFrame()
+        right_card.setObjectName("settlementCardFrame")
+        right_card.setStyleSheet("""
+            QFrame#settlementCardFrame {
+                background: #FFFFFF;
+                border: 1.5px solid #CBD5E1;
+                border-radius: 10px;
+            }
+        """)
+        rc_lay = QVBoxLayout(right_card)
+        rc_lay.setContentsMargins(10, 8, 10, 8)
+        rc_lay.setSpacing(5)
 
-        def _sc_row(row_idx, label, val_str, color="#0F172A", bold=False):
-            l = QLabel(label)
-            l.setStyleSheet(f"font-size: 12px; color: #475569; {'font-weight:700;' if bold else ''}")
-            vl = QLabel(val_str)
-            vl.setAlignment(Qt.AlignRight)
-            vl.setStyleSheet(f"font-size: 12px; color: {color}; {'font-weight:800;' if bold else 'font-weight:600;'}")
-            sc_lay.addWidget(l, row_idx, 0)
-            sc_lay.addWidget(vl, row_idx, 1)
-            return vl
+        # 1. Card Header Banner
+        card_hdr = QFrame()
+        card_hdr.setObjectName("scHeader")
+        card_hdr.setStyleSheet("""
+            QFrame#scHeader {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0F2342, stop:1 #1E3A8A);
+                border-radius: 7px;
+            }
+            QFrame#scHeader QLabel {
+                background: transparent;
+                border: none;
+            }
+        """)
+        hdr_lay = QVBoxLayout(card_hdr)
+        hdr_lay.setContentsMargins(12, 7, 12, 7)
+        hdr_lay.setSpacing(1)
 
-        self.lbl_sc_work = _sc_row(0, "Work Earnings:", "₹ 0.00")
-        self.lbl_sc_travel = _sc_row(1, "(+) Travel Expenses:", "+ ₹ 0.00", color="#059669")
-        self.lbl_sc_add = _sc_row(2, "(+) Other Additions:", "+ ₹ 0.00", color="#059669")
-        self.lbl_sc_gross = _sc_row(3, "Gross Payable:", "₹ 0.00", bold=True)
-        self.lbl_sc_adv = _sc_row(4, "(-) Advance Payments:", "- ₹ 0.00", color="#DC2626")
-        self.lbl_sc_ded = _sc_row(5, "(-) Other Deductions:", "- ₹ 0.00", color="#DC2626")
+        hdr_top = QHBoxLayout()
+        hdr_top.setSpacing(8)
+        self.lbl_sc_header_name = QLabel("Monthly Salary Statement")
+        self.lbl_sc_header_name.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        self.lbl_sc_header_name.setStyleSheet("color: #FFFFFF; font-weight: 800; font-size: 13px;")
+        hdr_top.addWidget(self.lbl_sc_header_name, 1)
 
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setStyleSheet("color: #CBD5E1;")
-        sc_lay.addWidget(line, 6, 0, 1, 2)
+        self.lbl_sc_status = QLabel("PENDING")
+        self.lbl_sc_status.setAlignment(Qt.AlignCenter)
+        self.lbl_sc_status.setStyleSheet("""
+            background: #FEF3C7; color: #92400E; font-size: 9.5px; font-weight: 800;
+            border-radius: 3px; padding: 2px 7px; border: 1px solid #FCD34D;
+        """)
+        hdr_top.addWidget(self.lbl_sc_status)
+        hdr_lay.addLayout(hdr_top)
 
-        self.lbl_sc_net = _sc_row(7, "NET PAYABLE:", "₹ 0.00", color="#173560", bold=True)
-        self.lbl_sc_paid = _sc_row(8, "Paid Amount:", "₹ 0.00", color="#059669")
-        self.lbl_sc_rem = _sc_row(9, "REMAINING DUE:", "₹ 0.00", color="#DC2626", bold=True)
+        self.lbl_sc_header_month = QLabel("Select worker and month above")
+        self.lbl_sc_header_month.setFont(QFont("Segoe UI", 9))
+        self.lbl_sc_header_month.setStyleSheet("color: #93C5FD; font-size: 10.5px;")
+        hdr_lay.addWidget(self.lbl_sc_header_month)
+        rc_lay.addWidget(card_hdr)
 
-        self.btn_settle_action = QPushButton("💰 Settle Month / Record Payment")
+        # Helper: section header label
+        def _section_title(icon: str, title: str, subtitle: str, fg: str) -> QWidget:
+            w_sec = QWidget()
+            w_sec.setStyleSheet("background: transparent; border: none;")
+            h_sec = QHBoxLayout(w_sec)
+            h_sec.setContentsMargins(2, 1, 2, 0)
+            h_sec.setSpacing(5)
+            t_lbl = QLabel(f"{icon}  <b>{title}</b>")
+            t_lbl.setStyleSheet(f"font-size: 10px; font-weight: 800; color: {fg}; letter-spacing: 0.5px; border: none; background: transparent;")
+            s_lbl = QLabel(subtitle)
+            s_lbl.setStyleSheet("font-size: 9.5px; color: #64748B; border: none; background: transparent;")
+            s_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            h_sec.addWidget(t_lbl)
+            h_sec.addStretch(1)
+            h_sec.addWidget(s_lbl)
+            return w_sec
+
+        # Helper: card row — returns (frame, value_QLabel, sub_QLabel_or_None)
+        def _card_row(label: str, value: str, val_color: str = "#0F172A",
+                      bold_val: bool = False, bg: str = "transparent", sub: str = None) -> tuple:
+            rf = QFrame()
+            rf.setObjectName("cardRow")
+            rf.setStyleSheet(f"QFrame#cardRow {{ background: {bg}; border: none; }}")
+            rh = QHBoxLayout(rf)
+            rh.setContentsMargins(10, 4, 10, 4)
+            rh.setSpacing(6)
+
+            lbl_sub = None
+            if sub:
+                lh = QVBoxLayout()
+                lh.setSpacing(0)
+                lbl_t = QLabel(label)
+                lbl_t.setStyleSheet("font-size: 11px; color: #1E293B; font-weight: 600; border: none; background: transparent;")
+                lbl_sub = QLabel(sub)
+                lbl_sub.setStyleSheet("font-size: 9px; color: #64748B; font-weight: 500; border: none; background: transparent;")
+                lh.addWidget(lbl_t)
+                lh.addWidget(lbl_sub)
+                rh.addLayout(lh, 1)
+            else:
+                lbl_t = QLabel(label)
+                lbl_t.setStyleSheet("font-size: 11.5px; color: #1E293B; font-weight: 600; border: none; background: transparent;")
+                rh.addWidget(lbl_t, 1)
+
+            lbl_v = QLabel(value)
+            lbl_v.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            weight = "900" if bold_val else "700"
+            size = "12px" if bold_val else "11.5px"
+            lbl_v.setStyleSheet(f"font-size: {size}; color: {val_color}; font-weight: {weight}; border: none; background: transparent;")
+            rh.addWidget(lbl_v)
+            return rf, lbl_v, lbl_sub
+
+        def _divider() -> QFrame:
+            d = QFrame()
+            d.setFrameShape(QFrame.HLine)
+            d.setStyleSheet("background: #E2E8F0; border: none; max-height: 1px; margin: 0px;")
+            d.setFixedHeight(1)
+            return d
+
+        # 2. Earnings Section
+        rc_lay.addWidget(_section_title("📈", "EARNINGS", "Work & Conveyance", "#1E40AF"))
+        earn_card = QFrame()
+        earn_card.setObjectName("scEarnCard")
+        earn_card.setStyleSheet("""
+            QFrame#scEarnCard {
+                background: #FFFFFF;
+                border: 1px solid #BFDBFE;
+                border-radius: 7px;
+            }
+            QFrame#scEarnCard QLabel {
+                background: transparent;
+                border: none;
+            }
+        """)
+        earn_vl = QVBoxLayout(earn_card)
+        earn_vl.setContentsMargins(0, 0, 0, 0)
+        earn_vl.setSpacing(0)
+
+        f0, self.lbl_sc_work,   self.lbl_sc_work_sub   = _card_row("Base Attendance:",       "₹ 0.00",    "#1E293B", bg="#F8FAFC", sub="Days worked × rate")
+        f1, self.lbl_sc_travel, self.lbl_sc_travel_sub = _card_row("(+) Travel / Rickshaw:", "+ ₹ 0.00",  "#047857", bg="#FFFFFF", sub="Site conveyance reimbursements")
+        f2, self.lbl_sc_add,    self.lbl_sc_add_sub    = _card_row("(+) Other Additions:",   "+ ₹ 0.00",  "#047857", bg="#FFFFFF", sub="Bonuses & allowances")
+        f3, self.lbl_sc_gross,  _                      = _card_row("Gross Payable:",         "₹ 0.00",    "#1E40AF", bold_val=True, bg="#EFF6FF", sub="Total earned before deductions")
+
+        for f in [f0, f1, f2, f3]:
+            earn_vl.addWidget(f)
+            if f is not f3:
+                earn_vl.addWidget(_divider())
+        rc_lay.addWidget(earn_card)
+
+        # 3. Deductions Section
+        rc_lay.addWidget(_section_title("📉", "DEDUCTIONS", "Advances & Deductions", "#991B1B"))
+        ded_card = QFrame()
+        ded_card.setObjectName("scDedCard")
+        ded_card.setStyleSheet("""
+            QFrame#scDedCard {
+                background: #FFFFFF;
+                border: 1px solid #FECACA;
+                border-radius: 7px;
+            }
+            QFrame#scDedCard QLabel {
+                background: transparent;
+                border: none;
+            }
+        """)
+        ded_vl = QVBoxLayout(ded_card)
+        ded_vl.setContentsMargins(0, 0, 0, 0)
+        ded_vl.setSpacing(0)
+
+        f4, self.lbl_sc_adv,     self.lbl_sc_adv_sub = _card_row("(-) Advance Payments:", "- ₹ 0.00", "#DC2626", bg="#FFF5F5", sub="Cash / UPI advances given")
+        f5, self.lbl_sc_ded,     self.lbl_sc_ded_sub = _card_row("(-) Other Deductions:", "- ₹ 0.00", "#DC2626", bg="#FFFFFF", sub="Damage / penalty / adjustments")
+        f5_tot, self.lbl_sc_tot_ded, _               = _card_row("Total Deductions:",     "- ₹ 0.00", "#991B1B", bold_val=True, bg="#FEF2F2")
+
+        for f in [f4, f5, f5_tot]:
+            ded_vl.addWidget(f)
+            if f is not f5_tot:
+                ded_vl.addWidget(_divider())
+        rc_lay.addWidget(ded_card)
+
+        # 4. Final Net Hero Card
+        net_hero = QFrame()
+        net_hero.setObjectName("scNetHero")
+        net_hero.setStyleSheet("""
+            QFrame#scNetHero {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #064E3B, stop:1 #059669);
+                border-radius: 8px;
+            }
+            QFrame#scNetHero QLabel {
+                background: transparent;
+                border: none;
+            }
+        """)
+        nh_lay = QVBoxLayout(net_hero)
+        nh_lay.setContentsMargins(12, 7, 12, 7)
+        nh_lay.setSpacing(1)
+
+        nh_top = QHBoxLayout()
+        lbl_net_t = QLabel("FINAL NET PAYABLE:")
+        lbl_net_t.setStyleSheet("font-size: 10px; font-weight: 800; color: #A7F3D0; letter-spacing: 0.8px;")
+        self.lbl_sc_net = QLabel("₹ 0.00")
+        self.lbl_sc_net.setStyleSheet("font-size: 18px; font-weight: 900; color: #FFFFFF;")
+        self.lbl_sc_net.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        nh_top.addWidget(lbl_net_t)
+        nh_top.addStretch(1)
+        nh_top.addWidget(self.lbl_sc_net)
+        nh_lay.addLayout(nh_top)
+
+        self.lbl_sc_net_sub = QLabel("Net payout after all advance & expense adjustments")
+        self.lbl_sc_net_sub.setStyleSheet("font-size: 9.5px; color: #D1FAE5;")
+        nh_lay.addWidget(self.lbl_sc_net_sub)
+        rc_lay.addWidget(net_hero)
+
+        # 5. Settlement & Payment Reconciliation
+        rc_lay.addWidget(_section_title("💳", "SETTLEMENT STATUS", "Paid vs Remaining", "#166534"))
+        pay_card = QFrame()
+        pay_card.setObjectName("scPayCard")
+        pay_card.setStyleSheet("""
+            QFrame#scPayCard {
+                background: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 7px;
+            }
+            QFrame#scPayCard QLabel {
+                background: transparent;
+                border: none;
+            }
+        """)
+        pay_vl = QVBoxLayout(pay_card)
+        pay_vl.setContentsMargins(0, 0, 0, 0)
+        pay_vl.setSpacing(0)
+
+        f6, self.lbl_sc_paid, _ = _card_row("Already Paid:",   "₹ 0.00", "#047857", bg="#F0FDF4", sub="Recorded settlement payments")
+        f7, self.lbl_sc_rem,  _ = _card_row("Remaining Due:", "₹ 0.00", "#DC2626", bold_val=True, bg="#FEF2F2", sub="Pending worker payout")
+
+        pay_vl.addWidget(f6)
+        pay_vl.addWidget(_divider())
+        pay_vl.addWidget(f7)
+        rc_lay.addWidget(pay_card)
+
+        # 6. Action Buttons
+        self.btn_settle_action = QPushButton("💰   Settle Month / Record Payment")
         self.btn_settle_action.setCursor(Qt.PointingHandCursor)
-        self.btn_settle_action.setStyleSheet(
-            "QPushButton { background: #173560; color: #FFFFFF; font-weight: 700; "
-            "border: none; border-radius: 6px; padding: 10px; font-size: 13px; } "
-            "QPushButton:hover { background: #0F2342; }"
-        )
+        self.btn_settle_action.setMinimumHeight(38)
+        self.btn_settle_action.setStyleSheet("""
+            QPushButton {
+                background: #173560; color: #FFFFFF; font-weight: 800;
+                border: none; border-radius: 7px; font-size: 12px;
+            }
+            QPushButton:hover { background: #0F2342; }
+        """)
         self.btn_settle_action.clicked.connect(self._open_settlement_dialog)
-        sc_lay.addWidget(self.btn_settle_action, 10, 0, 1, 2)
+        rc_lay.addWidget(self.btn_settle_action)
 
-        self.btn_view_slip_card = QPushButton("📸 View & Share Salary Slip (Photo Card)")
+        self.btn_view_slip_card = QPushButton("📸   View & Share Salary Slip (Photo Card)")
         self.btn_view_slip_card.setCursor(Qt.PointingHandCursor)
-        self.btn_view_slip_card.setStyleSheet(
-            "QPushButton { background: #059669; color: #FFFFFF; font-weight: 700; "
-            "border: none; border-radius: 6px; padding: 10px; font-size: 12px; } "
-            "QPushButton:hover { background: #047857; }"
-        )
+        self.btn_view_slip_card.setMinimumHeight(36)
+        self.btn_view_slip_card.setStyleSheet("""
+            QPushButton {
+                background: #059669; color: #FFFFFF; font-weight: 700;
+                border: none; border-radius: 7px; font-size: 11.5px;
+            }
+            QPushButton:hover { background: #047857; }
+        """)
         self.btn_view_slip_card.clicked.connect(self._open_summary_slip)
-        sc_lay.addWidget(self.btn_view_slip_card, 11, 0, 1, 2)
+        rc_lay.addWidget(self.btn_view_slip_card)
 
-        rb_lay.addWidget(self.settlement_card)
-        rb_lay.addStretch(1)
-        split.addWidget(right_box)
+        rc_lay.addStretch(1)
+        right_scroll.setWidget(right_card)
+        split.addWidget(right_scroll)
 
-        split.setSizes([600, 380])
+        split.setSizes([640, 380])
         lay.addWidget(split, 1)
 
         return w
 
-    def _make_sub_table(self, headers: list[str]) -> QTableWidget:
+    # -------------------------------------------------------------------------
+    # Tab 5: Payment Done Ledger & Confirmed Vouchers
+    # -------------------------------------------------------------------------
+    def _build_payment_done_tab(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(16, 16, 16, 16)
+        lay.setSpacing(12)
+
+        # ── 1. Top KPI Summary Strip for Confirmed Payouts ───────────────────
+        kpi_row = QHBoxLayout()
+        kpi_row.setSpacing(12)
+
+        def _pdone_kpi_card(title: str, val_attr: str, subtext: str, accent: str):
+            c = QFrame()
+            c.setObjectName("pdoneKpiCard")
+            c.setStyleSheet(f"""
+                QFrame#pdoneKpiCard {{
+                    background: #FFFFFF; border: 1.5px solid #E2E8F0;
+                    border-top: 3.5px solid {accent}; border-radius: 8px; padding: 10px 14px;
+                }}
+                QFrame#pdoneKpiCard QLabel {{
+                    border: none; background: transparent;
+                }}
+            """)
+            cl = QVBoxLayout(c)
+            cl.setContentsMargins(0, 0, 0, 0)
+            cl.setSpacing(2)
+            lt = QLabel(title)
+            lt.setStyleSheet("font-size: 9.5px; font-weight: 800; color: #64748B; letter-spacing: 0.5px;")
+            lv = QLabel("—")
+            lv.setStyleSheet(f"font-size: 17px; font-weight: 900; color: {accent};")
+            ls = QLabel(subtext)
+            ls.setStyleSheet("font-size: 9px; color: #94A3B8;")
+            cl.addWidget(lt)
+            cl.addWidget(lv)
+            cl.addWidget(ls)
+            setattr(self, val_attr, lv)
+            return c
+
+        kpi_row.addWidget(_pdone_kpi_card("TOTAL PAID OUT", "lbl_pdone_kpi_total", "Confirmed Paid Dues", "#059669"), 1)
+        kpi_row.addWidget(_pdone_kpi_card("TOTAL VOUCHERS", "lbl_pdone_kpi_vouchers", "Confirmed Settlements", "#2563EB"), 1)
+        kpi_row.addWidget(_pdone_kpi_card("SETTLED WORKERS", "lbl_pdone_kpi_workers", "Workers with Confirmed Pay", "#7C3AED"), 1)
+        lay.addLayout(kpi_row)
+
+        # ── 2. Filters & Actions Toolbar ─────────────────────────────────────
+        tb = QHBoxLayout()
+        tb.setSpacing(10)
+
+        self.f_pdone_search = QLineEdit()
+        self.f_pdone_search.setPlaceholderText("🔍 Search by Voucher #, Worker Name, Mode...")
+        self.f_pdone_search.setClearButtonEnabled(True)
+        self.f_pdone_search.setStyleSheet("""
+            QLineEdit {
+                font-size: 12px; padding: 6px 12px; border: 1px solid #CBD5E1;
+                border-radius: 6px; background: #FFFFFF; min-width: 240px;
+            }
+            QLineEdit:focus { border: 1.5px solid #173560; }
+        """)
+        self.f_pdone_search.textChanged.connect(self._load_payment_done_data)
+        tb.addWidget(self.f_pdone_search)
+
+        lbl_w = QLabel("Worker:")
+        lbl_w.setStyleSheet("font-size: 11px; font-weight: 700; color: #475569;")
+        tb.addWidget(lbl_w)
+
+        self.cb_pdone_worker = QComboBox()
+        self.cb_pdone_worker.setFixedWidth(200)
+        self.cb_pdone_worker.setStyleSheet("""
+            QComboBox {
+                font-size: 12px; font-weight: 600; padding: 6px 10px;
+                border: 1px solid #CBD5E1; border-radius: 6px; background: #FFFFFF;
+            }
+        """)
+        self.cb_pdone_worker.addItem("All Workers", None)
+        self.cb_pdone_worker.currentIndexChanged.connect(self._load_payment_done_data)
+        tb.addWidget(self.cb_pdone_worker)
+
+        lbl_m = QLabel("Month:")
+        lbl_m.setStyleSheet("font-size: 11px; font-weight: 700; color: #475569;")
+        tb.addWidget(lbl_m)
+
+        self.cb_pdone_month = QComboBox()
+        self.cb_pdone_month.addItem("All Months", None)
+        for m in range(1, 13):
+            self.cb_pdone_month.addItem(calendar.month_name[m], m)
+        self.cb_pdone_month.currentIndexChanged.connect(self._load_payment_done_data)
+        tb.addWidget(self.cb_pdone_month)
+
+        lbl_y = QLabel("Year:")
+        lbl_y.setStyleSheet("font-size: 11px; font-weight: 700; color: #475569;")
+        tb.addWidget(lbl_y)
+
+        self.cb_pdone_year = QComboBox()
+        self.cb_pdone_year.addItem("All Years", None)
+        cur_year = date.today().year
+        for y in range(cur_year - 2, cur_year + 3):
+            self.cb_pdone_year.addItem(str(y), y)
+        self.cb_pdone_year.setCurrentIndex(0)
+        self.cb_pdone_year.currentIndexChanged.connect(self._load_payment_done_data)
+        tb.addWidget(self.cb_pdone_year)
+
+        tb.addStretch(1)
+
+        btn_refresh = QPushButton("↻ Refresh")
+        btn_refresh.setCursor(Qt.PointingHandCursor)
+        btn_refresh.setStyleSheet("""
+            QPushButton {
+                background: #F1F5F9; color: #334155; font-weight: 700; font-size: 11px;
+                border: 1px solid #CBD5E1; border-radius: 6px; padding: 6px 14px;
+            }
+            QPushButton:hover { background: #E2E8F0; }
+        """)
+        btn_refresh.clicked.connect(self._load_payment_done_data)
+        tb.addWidget(btn_refresh)
+
+        btn_new_settle = QPushButton("💰 Settle Worker Payment")
+        btn_new_settle.setCursor(Qt.PointingHandCursor)
+        btn_new_settle.setStyleSheet("""
+            QPushButton {
+                background: #173560; color: #FFFFFF; font-weight: 800; font-size: 11px;
+                border: none; border-radius: 6px; padding: 7px 16px;
+            }
+            QPushButton:hover { background: #0F2342; }
+        """)
+        btn_new_settle.clicked.connect(self._open_new_settlement_from_pdone)
+        tb.addWidget(btn_new_settle)
+
+        lay.addLayout(tb)
+
+        # ── 3. Main Payments Done Table ──────────────────────────────────────
+        self.table_pdone = QTableWidget()
+        self.table_pdone.setColumnCount(12)
+        self.table_pdone.setHorizontalHeaderLabels([
+            "VOUCHER #", "WORKER NAME", "WORK TYPE", "SETTLED PERIOD",
+            "DAYS PAID", "WORK EARNINGS", "ADVANCES (-)", "NET PAID",
+            "PAYMENT DATE", "MODE", "STATUS", "ACTIONS"
+        ])
+        hh = self.table_pdone.horizontalHeader()
+        hh.setMinimumSectionSize(60)
+        for i in range(12):
+            hh.setSectionResizeMode(i, QHeaderView.Interactive)
+
+        self.table_pdone.setColumnWidth(0, 125)
+        self.table_pdone.setColumnWidth(1, 130)
+        self.table_pdone.setColumnWidth(2, 75)
+        self.table_pdone.setColumnWidth(3, 180)
+        self.table_pdone.setColumnWidth(4, 85)
+        self.table_pdone.setColumnWidth(5, 110)
+        self.table_pdone.setColumnWidth(6, 95)
+        self.table_pdone.setColumnWidth(7, 100)
+        self.table_pdone.setColumnWidth(8, 95)
+        self.table_pdone.setColumnWidth(9, 65)
+        self.table_pdone.setColumnWidth(10, 105)
+        self.table_pdone.setColumnWidth(11, 108)
+
+        self.table_pdone.verticalHeader().setVisible(False)
+        self.table_pdone.verticalHeader().setDefaultSectionSize(42)
+        self.table_pdone.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table_pdone.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.table_pdone.setStyleSheet("""
+            QTableWidget {
+                border: 1px solid #E2E8F0; gridline-color: #F1F5F9;
+                font-size: 12px; background: #FFFFFF;
+            }
+            QTableWidget::item { padding: 4px 8px; }
+            QHeaderView::section {
+                background: #F8FAFC; color: #334155; font-weight: 700;
+                border: none; border-bottom: 2px solid #CBD5E1; border-right: 1px solid #E2E8F0;
+                padding: 8px; font-size: 11px;
+            }
+        """)
+        lay.addWidget(self.table_pdone, 1)
+
+        return w
+
+    def _load_payment_done_data(self):
+        query = getattr(self, "f_pdone_search", None)
+        search_txt = query.text().strip() if query else ""
+
+        w_cb = getattr(self, "cb_pdone_worker", None)
+        worker_id = w_cb.currentData() if w_cb else None
+
+        m_cb = getattr(self, "cb_pdone_month", None)
+        month = m_cb.currentData() if m_cb else None
+
+        y_cb = getattr(self, "cb_pdone_year", None)
+        year = y_cb.currentData() if y_cb else None
+
+        records = worker_service.get_all_payment_done_records(
+            worker_id=worker_id,
+            year=year,
+            month=month,
+            search_query=search_txt,
+        )
+
+        total_paid = sum(r["paid_amount"] for r in records)
+        unique_workers = len(set(r["worker_id"] for r in records))
+        if hasattr(self, "lbl_pdone_kpi_total"):
+            self.lbl_pdone_kpi_total.setText(_money(total_paid))
+        if hasattr(self, "lbl_pdone_kpi_vouchers"):
+            self.lbl_pdone_kpi_vouchers.setText(f"{len(records)} Vouchers")
+        if hasattr(self, "lbl_pdone_kpi_workers"):
+            self.lbl_pdone_kpi_workers.setText(f"{unique_workers} Workers")
+
+        if not hasattr(self, "table_pdone"):
+            return
+
+        self._clear_table_widgets(self.table_pdone)
+
+        if not records:
+            self.table_pdone.setRowCount(1)
+            self.table_pdone.setRowHeight(0, 48)
+            self.table_pdone.setSpan(0, 0, 1, self.table_pdone.columnCount())
+            empty_it = QTableWidgetItem("ℹ  No confirmed payment records found matching the filters.")
+            empty_it.setTextAlignment(Qt.AlignCenter)
+            empty_it.setForeground(QColor("#94A3B8"))
+            empty_it.setFont(QFont("Segoe UI", 11))
+            self.table_pdone.setItem(0, 0, empty_it)
+            return
+
+        self.table_pdone.setRowCount(len(records))
+
+        for r, rec in enumerate(records):
+            self.table_pdone.setRowHeight(r, 42)
+
+            # Col 0: Voucher #
+            v_it = QTableWidgetItem(rec["voucher_no"])
+            v_it.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            v_it.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            v_it.setForeground(QColor("#1E40AF"))
+            self.table_pdone.setItem(r, 0, v_it)
+
+            # Col 1: Worker Name
+            w_it = QTableWidgetItem(rec["worker_name"])
+            w_it.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            w_it.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            w_it.setForeground(QColor("#0F172A"))
+            self.table_pdone.setItem(r, 1, w_it)
+
+            # Col 2: Work Type
+            wt_it = QTableWidgetItem(rec["work_type"])
+            wt_it.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            wt_it.setFont(QFont("Segoe UI", 10))
+            self.table_pdone.setItem(r, 2, wt_it)
+
+            # Col 3: Settled Period
+            per_it = QTableWidgetItem(rec["period_label"])
+            per_it.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            per_it.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            per_it.setForeground(QColor("#334155"))
+            self.table_pdone.setItem(r, 3, per_it)
+
+            # Col 4: Days Paid
+            d_it = QTableWidgetItem(f"{rec['total_units']:.1f} Days")
+            d_it.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            d_it.setFont(QFont("Segoe UI", 10))
+            self.table_pdone.setItem(r, 4, d_it)
+
+            # Col 5: Work Earnings
+            e_it = QTableWidgetItem(_money(rec["work_earnings"]))
+            e_it.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+            e_it.setFont(QFont("Segoe UI", 10))
+            self.table_pdone.setItem(r, 5, e_it)
+
+            # Col 6: Advances (-)
+            adv_it = QTableWidgetItem(f"- {_money(rec['total_advances'])}")
+            adv_it.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+            adv_it.setFont(QFont("Segoe UI", 10))
+            adv_it.setForeground(QColor("#DC2626"))
+            self.table_pdone.setItem(r, 6, adv_it)
+
+            # Col 7: Net Paid
+            paid_it = QTableWidgetItem(_money(rec["paid_amount"]))
+            paid_it.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+            paid_it.setFont(QFont("Segoe UI", 10, QFont.Bold))
+            paid_it.setForeground(QColor("#059669"))
+            self.table_pdone.setItem(r, 7, paid_it)
+
+            # Col 8: Payment Date
+            dt_it = QTableWidgetItem(rec["payment_date_str"])
+            dt_it.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            dt_it.setFont(QFont("Segoe UI", 10))
+            self.table_pdone.setItem(r, 8, dt_it)
+
+            # Col 9: Mode
+            m_it = QTableWidgetItem(rec["payment_method"])
+            m_it.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+            m_it.setFont(QFont("Segoe UI", 10))
+            self.table_pdone.setItem(r, 9, m_it)
+
+            # Col 10: Status
+            st_w = QWidget()
+            st_l = QHBoxLayout(st_w)
+            st_l.setContentsMargins(0, 0, 0, 0)
+            st_l.setAlignment(Qt.AlignCenter)
+            st_lbl = QLabel("✓ CONFIRMED")
+            st_lbl.setStyleSheet("""
+                background: #DCFCE7; color: #15803D; font-size: 10px; font-weight: 800;
+                border-radius: 4px; padding: 3px 8px; border: 1px solid #86EFAC;
+            """)
+            st_l.addWidget(st_lbl)
+            self.table_pdone.setCellWidget(r, 10, st_w)
+
+            # Col 11: Actions (Slip 📸, WhatsApp 💬, Rollback ↩️)
+            act_w = QWidget()
+            act_l = QHBoxLayout(act_w)
+            act_l.setContentsMargins(4, 2, 4, 2)
+            act_l.setSpacing(4)
+            act_l.setAlignment(Qt.AlignCenter)
+
+            _emoji_f = QFont("Segoe UI Emoji", 13)
+
+            def _act_btn(symbol, tip, fg, bg, hover):
+                b = QPushButton(symbol)
+                b.setCursor(Qt.PointingHandCursor)
+                b.setToolTip(tip)
+                b.setFixedSize(30, 26)
+                b.setFont(_emoji_f)
+                b.setStyleSheet(
+                    f"QPushButton {{ background: {bg}; color: {fg}; "
+                    f"border: 1px solid {fg}40; border-radius: 5px; font-size: 13px; }} "
+                    f"QPushButton:hover {{ background: {hover}; }}"
+                )
+                return b
+
+            b_slip = _act_btn("\U0001F4F8", "View and export salary slip card", "#047857", "#ECFDF5", "#A7F3D0")
+            b_slip.clicked.connect(lambda _=False, rc=rec: self._open_pdone_slip(rc))
+            act_l.addWidget(b_slip)
+
+            b_wa = _act_btn("\U0001F4AC", "Copy WhatsApp payment receipt", "#2563EB", "#EFF6FF", "#BFDBFE")
+            b_wa.clicked.connect(lambda _=False, sid=rec["id"]: self._copy_pdone_whatsapp(sid))
+            act_l.addWidget(b_wa)
+
+            b_undo = _act_btn("\u21A9", "Rollback settlement (Reopen dates as active)", "#DC2626", "#FEF2F2", "#FECACA")
+            b_undo.clicked.connect(lambda _=False, sid=rec["id"], vn=rec["voucher_no"], wn=rec["worker_name"], pl=rec["period_label"]: self._rollback_pdone(sid, vn, wn, pl))
+            act_l.addWidget(b_undo)
+
+            self.table_pdone.setCellWidget(r, 11, act_w)
+
+    def _open_pdone_slip(self, rec: dict):
+        worker_id = rec["worker_id"]
+        biz_name = ""
+        try:
+            biz = business_service.get_business_profile()
+            biz_name = biz.get("name", "")
+        except Exception:
+            pass
+
+        st_d = rec.get("start_date")
+        end_d = rec.get("end_date") or rec.get("payment_date")
+
+        summary = {
+            "worker_id": worker_id,
+            "name": rec["worker_name"],
+            "worker_code": rec.get("worker_code", ""),
+            "mobile": rec.get("mobile", ""),
+            "work_type": rec.get("work_type", "Staff"),
+            "current_daily_rate": rec.get("daily_rate", 0.0),
+            "daily_rate": rec.get("daily_rate", 0.0),
+            "year": rec["payment_date"].year if rec.get("payment_date") else date.today().year,
+            "month": rec["payment_date"].month if rec.get("payment_date") else date.today().month,
+            "month_name": rec.get("period_label", "Settled Period"),
+            "voucher_no": rec.get("voucher_no", ""),
+            "period_label": rec.get("period_label", ""),
+            "total_units": rec.get("total_units", 0.0),
+            "total_work_earning": rec.get("work_earnings", 0.0),
+            "total_travel": max(0.0, rec.get("gross_payable", 0.0) - rec.get("work_earnings", 0.0) - rec.get("total_additions", 0.0)),
+            "total_additions": rec.get("total_additions", 0.0),
+            "gross_payable": rec.get("gross_payable", 0.0),
+            "total_advance": rec.get("total_advances", 0.0),
+            "total_deductions": rec.get("total_deductions", 0.0),
+            "net_payable": rec.get("paid_amount", 0.0),
+            "paid_amount": rec.get("paid_amount", 0.0),
+            "remaining_balance": 0.0,
+            "payment_date_str": rec.get("payment_date_str", ""),
+            "payment_method": rec.get("payment_method", "Cash"),
+            "is_settled": True,
+            "full_days": int(rec.get("total_units", 0)),
+            "half_days": 0,
+            "one_and_half_days": 0,
+            "double_days": 0,
+            "absent_days": 0,
+            "custom_days": 0,
+            "attendances": [],
+            "advances": [],
+            "travel_expenses": [],
+            "adjustments": [],
+        }
+
+        if st_d and end_d:
+            session = worker_service.get_session()
+            try:
+                from app.models.models import WorkerAttendance, WorkerAdvance
+                atts = (
+                    session.query(WorkerAttendance)
+                    .filter(
+                        WorkerAttendance.worker_id == worker_id,
+                        WorkerAttendance.attendance_date >= st_d,
+                        WorkerAttendance.attendance_date <= end_d,
+                    )
+                    .order_by(WorkerAttendance.attendance_date)
+                    .all()
+                )
+                advs = (
+                    session.query(WorkerAdvance)
+                    .filter(
+                        WorkerAdvance.worker_id == worker_id,
+                        WorkerAdvance.advance_date >= st_d,
+                        WorkerAdvance.advance_date <= end_d,
+                    )
+                    .order_by(WorkerAdvance.advance_date)
+                    .all()
+                )
+                summary["attendances"] = [
+                    {
+                        "date": a.attendance_date,
+                        "date_str": a.attendance_date.strftime("%d %b %Y"),
+                        "day_multiplier": float(a.day_multiplier or 0),
+                        "daily_rate": float(a.daily_rate or 0),
+                        "daily_earning": float(a.daily_earning or 0),
+                        "status_label": a.status_label or "Present",
+                        "notes": a.notes or "",
+                    }
+                    for a in atts
+                ]
+                summary["advances"] = [
+                    {
+                        "id": adv.id,
+                        "date": adv.advance_date,
+                        "date_str": adv.advance_date.strftime("%d %b %Y"),
+                        "amount": float(adv.amount or 0),
+                        "payment_method": adv.payment_method or "Cash",
+                        "notes": adv.notes or "",
+                    }
+                    for adv in advs
+                ]
+            finally:
+                session.close()
+
+        dlg = MonthlySummarySlipDialog(self, summary=summary, business_name=biz_name)
+        dlg.exec()
+
+    def _copy_pdone_whatsapp(self, settlement_id: int):
+        biz_name = ""
+        try:
+            biz = business_service.get_business_profile()
+            biz_name = biz.get("name", "")
+        except Exception:
+            pass
+        txt = worker_service.generate_payment_done_whatsapp_text(settlement_id, business_name=biz_name)
+        if txt:
+            QGuiApplication.clipboard().setText(txt)
+            show_toast(self, "WhatsApp payment voucher receipt copied to clipboard!", "success")
+        else:
+            show_toast(self, "Could not generate WhatsApp receipt.", "warning")
+
+    def _rollback_pdone(self, settlement_id: int, voucher_no: str, worker_name: str, period_label: str):
+        ret = QMessageBox.question(
+            self,
+            "Confirm Payment Rollback",
+            f"Are you sure you want to rollback Payment Voucher {voucher_no}?\n\n"
+            f"Worker: {worker_name}\n"
+            f"Period: {period_label}\n\n"
+            "This will delete the settlement record and reopen all attendance & advance\n"
+            "records in this period back into the active pending cycle.",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if ret == QMessageBox.Yes:
+            success = worker_service.rollback_payment_done(settlement_id)
+            if success:
+                show_toast(self, f"Voucher {voucher_no} rolled back. Period reopened.", "info")
+                self._load_payment_done_data()
+                self._load_settlement_data()
+                self._load_directory_data()
+                self._load_monthly_history_data()
+                self._load_daily_attendance_data()
+                self._load_kpis()
+            else:
+                show_toast(self, "Could not rollback settlement.", "danger")
+
+    def _open_new_settlement_from_pdone(self):
+        worker_id = getattr(self, "cb_pdone_worker", None) and self.cb_pdone_worker.currentData()
+        if not worker_id:
+            self.tabs.setCurrentIndex(3)
+            return
+        idx = self.cb_pay_worker.findData(worker_id)
+        if idx >= 0:
+            self.cb_pay_worker.setCurrentIndex(idx)
+        self._open_settlement_dialog()
+
+    def _make_sub_table(self, headers: list[str], is_adj: bool = False) -> QTableWidget:
         t = QTableWidget(0, len(headers))
         t.setHorizontalHeaderLabels(headers)
-        t.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        t.horizontalHeader().setSectionResizeMode(len(headers) - 2, QHeaderView.Stretch)
         t.verticalHeader().setVisible(False)
+        t.verticalHeader().setDefaultSectionSize(38)
         t.setSelectionBehavior(QAbstractItemView.SelectRows)
         t.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        t.setAlternatingRowColors(True)
+        t.setShowGrid(False)
         t.setStyleSheet("""
-            QTableWidget { border: none; gridline-color: #F1F5F9; font-size: 11px; }
-            QTableWidget::item { padding: 4px 6px; }
-            QHeaderView::section { background: #F8FAFC; color: #475569; font-weight: 700; border: none; border-bottom: 2px solid #CBD5E1; padding: 6px; font-size: 11px; }
+            QTableWidget {
+                border: 1px solid #E2E8F0;
+                background: #FFFFFF;
+                alternate-background-color: #F8FAFC;
+                gridline-color: transparent;
+                border-radius: 6px;
+                font-size: 12px;
+            }
+            QTableWidget::item {
+                padding: 4px 10px;
+                border-bottom: 1px solid #F1F5F9;
+                color: #1E293B;
+            }
+            QTableWidget::item:selected {
+                background: #EFF6FF;
+                color: #173560;
+            }
+            QHeaderView::section {
+                background: #F8FAFC;
+                color: #334155;
+                font-weight: 800;
+                border: none;
+                border-bottom: 2px solid #CBD5E1;
+                border-right: 1px solid #E2E8F0;
+                padding: 8px 10px;
+                font-size: 11px;
+            }
         """)
+        if len(headers) == 8:
+            # Settlement History: ["Month", "Days", "Earnings", "Advances", "Paid Amount", "Paid Date", "Mode", "Status"]
+            for c in range(8):
+                t.horizontalHeader().setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        elif not is_adj:
+            # ["Date", "Amount", "Method / Category", "Notes / Purpose", "Action"]
+            t.setColumnWidth(0, 115)
+            t.setColumnWidth(1, 130)
+            t.setColumnWidth(2, 120)
+            t.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+            t.setColumnWidth(4, 70)
+        else:
+            # ["Date", "Type", "Category", "Amount", "Reason / Notes", "Action"]
+            t.setColumnWidth(0, 115)
+            t.setColumnWidth(1, 105)
+            t.setColumnWidth(2, 115)
+            t.setColumnWidth(3, 130)
+            t.horizontalHeader().setSectionResizeMode(4, QHeaderView.Stretch)
+            t.setColumnWidth(5, 70)
         return t
 
     # -------------------------------------------------------------------------
@@ -2075,6 +3138,7 @@ class WorkersPage(BasePage):
         self._load_daily_attendance_data()
         self._load_monthly_history_data()
         self._load_settlement_data()
+        self._load_payment_done_data()
 
     def _on_tab_changed(self, idx: int):
         self._load_kpis()
@@ -2086,6 +3150,8 @@ class WorkersPage(BasePage):
             self._load_monthly_history_data()
         elif idx == 3:
             self._load_settlement_data()
+        elif idx == 4:
+            self._load_payment_done_data()
 
     def _sync_worker_comboboxes(self):
         workers = worker_service.get_workers(is_active=None)
@@ -2102,6 +3168,19 @@ class WorkersPage(BasePage):
                 if idx >= 0:
                     cb.setCurrentIndex(idx)
             cb.blockSignals(False)
+
+        if hasattr(self, "cb_pdone_worker"):
+            curr_id = self.cb_pdone_worker.currentData()
+            self.cb_pdone_worker.blockSignals(True)
+            self.cb_pdone_worker.clear()
+            self.cb_pdone_worker.addItem("All Workers", None)
+            for idx, w in enumerate(workers, 1):
+                self.cb_pdone_worker.addItem(f"{idx}. {w.name} ({w.work_type})", w.id)
+            if curr_id:
+                idx = self.cb_pdone_worker.findData(curr_id)
+                if idx >= 0:
+                    self.cb_pdone_worker.setCurrentIndex(idx)
+            self.cb_pdone_worker.blockSignals(False)
 
     # -------------------------------------------------------------------------
     # Data Loaders: KPIs
@@ -2134,6 +3213,7 @@ class WorkersPage(BasePage):
         today = date.today()
         workers = worker_service.get_workers(search_query=query, work_type=w_type, is_active=is_active)
 
+        self._clear_table_widgets(self.table_dir)
         self.table_dir.setRowCount(len(workers))
         for r, w in enumerate(workers):
             self.table_dir.setRowHeight(r, 42)
@@ -2163,10 +3243,46 @@ class WorkersPage(BasePage):
             rate_item.setFont(QFont("Segoe UI", 10))
             self.table_dir.setItem(r, 4, rate_item)
 
-            # Current Month stats (Monthly Total Payment = work earning + travel - advance)
+            # Check worker's active cycle (cutoff-aware)
+            active_cycle = worker_service.get_worker_active_cycle(w.id)
+            last_st = active_cycle.get("last_settled_date")
             summary = worker_service.get_worker_monthly_summary(w.id, today.year, today.month)
-            if summary:
-                # Monthly Total Payment = gross payable (earnings + travel + additions)
+
+            if last_st:
+                cycle_units = active_cycle.get("total_units", 0.0)
+                cycle_gross = active_cycle.get("gross_payable", 0.0)
+                cycle_adv = active_cycle.get("total_advances", 0.0)
+                cycle_net = active_cycle.get("net_payable", 0.0)
+                last_st_str = last_st.strftime("%d %b %Y")
+
+                e_item = QTableWidgetItem(_money(cycle_gross))
+                e_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                e_item.setFont(QFont("Segoe UI", 10))
+                e_item.setToolTip(f"Active cycle earnings (from {active_cycle.get('period_label', '')})")
+                self.table_dir.setItem(r, 5, e_item)
+
+                a_item = QTableWidgetItem(_money(cycle_adv))
+                a_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                a_item.setFont(QFont("Segoe UI", 10))
+                self.table_dir.setItem(r, 6, a_item)
+
+                if cycle_units > 0 or cycle_net > 0:
+                    net_item = QTableWidgetItem(f"{_money(cycle_net)} (New)")
+                    net_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                    net_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                    net_item.setForeground(QColor("#1E40AF"))
+                    net_item.setToolTip(
+                        f"Paid up to {last_st_str}.\n"
+                        f"Active Cycle ({active_cycle.get('period_label', '')}): {cycle_units:.1f} days worked, Net Due: {_money(cycle_net)}"
+                    )
+                else:
+                    net_item = QTableWidgetItem("✓ Paid (₹ 0.00)")
+                    net_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                    net_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                    net_item.setForeground(QColor("#059669"))
+                    net_item.setToolTip(f"Fully settled up to {last_st_str}. No active cycle dues.")
+                self.table_dir.setItem(r, 7, net_item)
+            elif summary:
                 monthly_total = summary.get('gross_payable', summary.get('total_work_earning', 0))
                 e_item = QTableWidgetItem(_money(monthly_total))
                 e_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
@@ -2178,10 +3294,35 @@ class WorkersPage(BasePage):
                 a_item.setFont(QFont("Segoe UI", 10))
                 self.table_dir.setItem(r, 6, a_item)
 
-                net_item = QTableWidgetItem(_money(summary['net_payable']))
-                net_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
-                net_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
-                net_item.setForeground(QColor("#173560"))
+                is_settled = summary.get("is_settled", False)
+                paid_val = summary.get("paid_amount", 0.0)
+                rem_val = summary.get("remaining_balance", 0.0)
+                p_date = summary.get("payment_date_str", "")
+                p_mode = summary.get("payment_method", "")
+
+                if is_settled or (rem_val <= 0 and paid_val > 0):
+                    net_item = QTableWidgetItem("✓ Paid (₹ 0.00)")
+                    net_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                    net_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                    net_item.setForeground(QColor("#059669"))
+                    tip = f"Fully Settled: {_money(paid_val)}"
+                    if p_date:
+                        tip += f" on {p_date}"
+                    if p_mode:
+                        tip += f" via {p_mode}"
+                    net_item.setToolTip(tip)
+                elif paid_val > 0 and rem_val > 0:
+                    net_item = QTableWidgetItem(f"{_money(rem_val)} (Part)")
+                    net_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                    net_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                    net_item.setForeground(QColor("#D97706"))
+                    net_item.setToolTip(f"Paid: {_money(paid_val)}, Remaining Due: {_money(rem_val)}")
+                else:
+                    net_item = QTableWidgetItem(_money(summary['net_payable']))
+                    net_item.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                    net_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                    net_item.setForeground(QColor("#173560"))
+                    net_item.setToolTip(f"Pending Payout: {_money(summary['net_payable'])}")
                 self.table_dir.setItem(r, 7, net_item)
             else:
                 for c in range(5, 8):
@@ -2189,30 +3330,34 @@ class WorkersPage(BasePage):
                     dash.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
                     self.table_dir.setItem(r, c, dash)
 
-            # Actions Box — compact styled text buttons
+            # Actions Box — emoji icon buttons (Segoe UI Emoji ensures rendering on Windows)
             act_box = QWidget()
             act_lay = QHBoxLayout(act_box)
             act_lay.setContentsMargins(4, 2, 4, 2)
             act_lay.setSpacing(4)
 
-            def _act_btn(label, tip, fg, bg, hover_bg):
-                b = QPushButton(label)
+            _emoji_font = QFont("Segoe UI Emoji", 14)
+
+            def _icon_btn(symbol, tip, fg, bg, hover):
+                b = QPushButton(symbol)
                 b.setCursor(Qt.PointingHandCursor)
                 b.setToolTip(tip)
+                b.setFixedSize(30, 26)
+                b.setFont(_emoji_font)
                 b.setStyleSheet(
-                    f"QPushButton {{ background: {bg}; color: {fg}; font-weight: 700; font-size: 11px; "
-                    f"border: 1px solid {fg}30; border-radius: 4px; padding: 3px 7px; }} "
-                    f"QPushButton:hover {{ background: {hover_bg}; color: #FFFFFF; }}"
+                    f"QPushButton {{ background: {bg}; color: {fg}; "
+                    f"border: 1px solid {fg}40; border-radius: 5px; font-size: 14px; }} "
+                    f"QPushButton:hover {{ background: {hover}; }}"
                 )
                 return b
 
-            btn_view   = _act_btn("View",       "View monthly history",             "#2563EB", "#EFF6FF", "#2563EB")
-            btn_card   = _act_btn("Slip",       "Share monthly salary card (photo)","#059669", "#ECFDF5", "#059669")
-            btn_edit   = _act_btn("Edit",       "Edit worker profile",               "#475569", "#F8FAFC", "#475569")
+            btn_view   = _icon_btn("\U0001F441", "View monthly history",              "#1D4ED8", "#EFF6FF", "#BFDBFE")
+            btn_card   = _icon_btn("\U0001F4F8", "Share monthly salary card",         "#047857", "#ECFDF5", "#6EE7B7")
+            btn_edit   = _icon_btn("\u270F",     "Edit worker profile",               "#374151", "#F9FAFB", "#D1D5DB")
             if w.is_active:
-                btn_toggle = _act_btn("Off",   "Deactivate worker",                "#DC2626", "#FEF2F2", "#DC2626")
+                btn_toggle = _icon_btn("\U0001F534", "Deactivate worker",             "#B91C1C", "#FEF2F2", "#FECACA")
             else:
-                btn_toggle = _act_btn("On",    "Activate worker",                  "#059669", "#ECFDF5", "#059669")
+                btn_toggle = _icon_btn("\U0001F7E2", "Activate worker",               "#047857", "#ECFDF5", "#6EE7B7")
 
             btn_view.clicked.connect(lambda _=False, w_id=w.id: self._jump_to_worker_history(w_id))
             btn_card.clicked.connect(lambda _=False, w_id=w.id: self._open_card_for_worker(w_id))
@@ -2297,6 +3442,7 @@ class WorkersPage(BasePage):
         workers = worker_service.get_workers(is_active=True)
         att_map = worker_service.get_daily_attendance(att_d)
 
+        self._clear_table_widgets(self.table_att)
         self.table_att.setRowCount(len(workers))
 
         cnt_full = 0
@@ -2343,8 +3489,9 @@ class WorkersPage(BasePage):
             elif mult == 0.0:
                 cnt_absent += 1
 
+            last_st = worker_service.get_worker_last_settled_date(w.id)
             # Selector widget
-            selector = self._make_attendance_selector(w.id, att_d, mult, w.daily_rate)
+            selector = self._make_attendance_selector(w.id, att_d, mult, w.daily_rate, last_st)
             self.table_att.setCellWidget(r, 4, selector)
 
             notes_item = QTableWidgetItem(rec.get("notes", ""))
@@ -2355,11 +3502,26 @@ class WorkersPage(BasePage):
         counts_text = f"Full (1.0): {cnt_full} | Half (0.5): {cnt_half} | 1.5 Day: {cnt_dedhi} | Double (2.0): {cnt_double} | Absent: {cnt_absent}"
         self.lbl_daily_att_counts.setText(counts_text)
 
-    def _make_attendance_selector(self, worker_id: int, att_d: date, current_multiplier: float | None, daily_rate) -> QWidget:
+    def _make_attendance_selector(self, worker_id: int, att_d: date, current_multiplier: float | None, daily_rate, last_settled_date: date | None = None) -> QWidget:
         box = QWidget()
         lay = QHBoxLayout(box)
         lay.setContentsMargins(2, 2, 2, 2)
         lay.setSpacing(4)
+
+        if last_settled_date and att_d <= last_settled_date:
+            st_val = f"{current_multiplier:.1f} Day" if current_multiplier is not None else "0 Day"
+            badge = QLabel(f"✓ Settled ({st_val} • Paid)")
+            badge.setStyleSheet("""
+                background: #ECFDF5; color: #059669; font-weight: 800;
+                border: 1px solid #A7F3D0; border-radius: 5px; padding: 5px 12px; font-size: 11px;
+            """)
+            badge.setToolTip(
+                f"Paid up to {last_settled_date.strftime('%d %b %Y')}.\n"
+                "To edit this date, please rollback the settlement voucher in the 'Payment Done' tab."
+            )
+            lay.addWidget(badge)
+            lay.addStretch(1)
+            return box
 
         options = [
             (0.0, "Absent (0)", "#DC2626"),
@@ -2402,6 +3564,11 @@ class WorkersPage(BasePage):
         return box
 
     def _set_attendance(self, worker_id: int, att_d: date, multiplier: float, status_label: str):
+        last_st = worker_service.get_worker_last_settled_date(worker_id)
+        if last_st and att_d <= last_st:
+            show_toast(self, f"Date {att_d.strftime('%d %b')} is settled in a payment voucher. Rollback in 'Payment Done' tab to edit.", "warning")
+            return
+
         worker_service.record_daily_attendance(
             worker_id=worker_id,
             att_date=att_d,
@@ -2434,6 +3601,11 @@ class WorkersPage(BasePage):
 
     def _delete_attendance_record(self, worker_id: int, att_date: date):
         """Delete a single attendance record after confirmation."""
+        last_st = worker_service.get_worker_last_settled_date(worker_id)
+        if last_st and att_date <= last_st:
+            show_toast(self, f"Date {att_date.strftime('%d %b')} is settled in a payment voucher. Rollback in 'Payment Done' tab to edit.", "warning")
+            return
+
         worker = worker_service.get_worker_by_id(worker_id)
         w_name = worker.name if worker else f"Worker #{worker_id}"
         date_str = att_date.strftime("%d %b %Y")
@@ -2582,14 +3754,18 @@ class WorkersPage(BasePage):
         month = self.cb_hist_month.currentData() or date.today().month
 
         if not worker_id:
+            self._clear_table_widgets(self.table_hist)
             self.table_hist.setRowCount(0)
             self._update_hist_footer(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            self.lbl_hist_settle_badge.setVisible(False)
             return
 
         summary = worker_service.get_worker_monthly_summary(worker_id, year, month)
         if not summary:
+            self._clear_table_widgets(self.table_hist)
             self.table_hist.setRowCount(0)
             self._update_hist_footer(0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+            self.lbl_hist_settle_badge.setVisible(False)
             return
 
         # Map travel expenses by date
@@ -2644,6 +3820,7 @@ class WorkersPage(BasePage):
             date_keys.add(d)
 
         sorted_dates = sorted(date_keys)
+        self._clear_table_widgets(self.table_hist)
         self.table_hist.setRowCount(len(sorted_dates))
 
         for r, d in enumerate(sorted_dates):
@@ -2755,33 +3932,53 @@ class WorkersPage(BasePage):
             act_layout.setContentsMargins(3, 2, 3, 2)
             act_layout.setSpacing(4)
 
-            if a:  # Has attendance — show Edit + Delete
-                btn_edit_row = QPushButton("Edit")
-                btn_edit_row.setCursor(Qt.PointingHandCursor)
-                btn_edit_row.setToolTip("Edit attendance, travel or advance for this date")
-                btn_edit_row.setStyleSheet(
-                    "QPushButton { background: #EFF6FF; color: #2563EB; font-weight: 700; border: 1px solid #BFDBFE; "
-                    "border-radius: 4px; padding: 3px 10px; font-size: 11px; } "
-                    "QPushButton:hover { background: #2563EB; color: #FFFFFF; }"
-                )
-                worker_id_hist = self.cb_hist_worker.currentData()
-                btn_edit_row.clicked.connect(
-                    lambda _=False, w_id=worker_id_hist, dt=d,
-                    cur_mult=a["day_multiplier"], cur_notes=a.get("notes",""):
-                    self._open_daily_edit_dialog(w_id, dt, {"att_multiplier": cur_mult, "att_notes": cur_notes})
-                )
-                act_layout.addWidget(btn_edit_row)
+            is_row_settled = bool(a and a.get("is_settled")) or bool(summary.get("last_settled_date") and d <= summary.get("last_settled_date"))
 
-                btn_del_hist = QPushButton("Del")
-                btn_del_hist.setCursor(Qt.PointingHandCursor)
-                btn_del_hist.setToolTip("Delete this day's attendance record")
-                btn_del_hist.setStyleSheet(
-                    "QPushButton { background: #FEF2F2; color: #DC2626; font-weight: 700; border: 1px solid #FECACA; "
-                    "border-radius: 4px; padding: 3px 8px; font-size: 11px; } "
-                    "QPushButton:hover { background: #DC2626; color: #FFFFFF; }"
-                )
-                btn_del_hist.clicked.connect(lambda _=False, w_id=worker_id_hist, att_date=d: self._delete_attendance_record(w_id, att_date))
-                act_layout.addWidget(btn_del_hist)
+            if a:  # Has attendance
+                if is_row_settled:
+                    btn_settled = QPushButton("✓ Settled")
+                    btn_settled.setCursor(Qt.PointingHandCursor)
+                    btn_settled.setToolTip("This date is settled and paid. Rollback in 'Payment Done' tab to edit.")
+                    btn_settled.setStyleSheet(
+                        "QPushButton { background: #ECFDF5; color: #059669; font-weight: 700; border: 1px solid #A7F3D0; "
+                        "border-radius: 4px; padding: 3px 10px; font-size: 11px; } "
+                        "QPushButton:hover { background: #D1FAE5; }"
+                    )
+                    btn_settled.clicked.connect(
+                        lambda _=False, dt_s=date_str: QMessageBox.information(
+                            self, "Date Settled",
+                            f"Attendance for {dt_s} is locked in a confirmed payment voucher.\n\n"
+                            "To edit or delete this date, please rollback the settlement voucher in the 'Payment Done' tab."
+                        )
+                    )
+                    act_layout.addWidget(btn_settled)
+                else:
+                    btn_edit_row = QPushButton("Edit")
+                    btn_edit_row.setCursor(Qt.PointingHandCursor)
+                    btn_edit_row.setToolTip("Edit attendance, travel or advance for this date")
+                    btn_edit_row.setStyleSheet(
+                        "QPushButton { background: #EFF6FF; color: #2563EB; font-weight: 700; border: 1px solid #BFDBFE; "
+                        "border-radius: 4px; padding: 3px 10px; font-size: 11px; } "
+                        "QPushButton:hover { background: #2563EB; color: #FFFFFF; }"
+                    )
+                    worker_id_hist = self.cb_hist_worker.currentData()
+                    btn_edit_row.clicked.connect(
+                        lambda _=False, w_id=worker_id_hist, dt=d,
+                        cur_mult=a["day_multiplier"], cur_notes=a.get("notes",""):
+                        self._open_daily_edit_dialog(w_id, dt, {"att_multiplier": cur_mult, "att_notes": cur_notes})
+                    )
+                    act_layout.addWidget(btn_edit_row)
+
+                    btn_del_hist = QPushButton("Del")
+                    btn_del_hist.setCursor(Qt.PointingHandCursor)
+                    btn_del_hist.setToolTip("Delete this day's attendance record")
+                    btn_del_hist.setStyleSheet(
+                        "QPushButton { background: #FEF2F2; color: #DC2626; font-weight: 700; border: 1px solid #FECACA; "
+                        "border-radius: 4px; padding: 3px 8px; font-size: 11px; } "
+                        "QPushButton:hover { background: #DC2626; color: #FFFFFF; }"
+                    )
+                    btn_del_hist.clicked.connect(lambda _=False, w_id=worker_id_hist, att_date=d: self._delete_attendance_record(w_id, att_date))
+                    act_layout.addWidget(btn_del_hist)
 
             else:  # No attendance — show Add button
                 btn_add_row = QPushButton("+ Add")
@@ -2799,6 +3996,41 @@ class WorkersPage(BasePage):
             act_layout.addStretch(1)
             self.table_hist.setCellWidget(r, 8, act_cell)
 
+        is_st = summary.get("is_settled", False)
+        paid_val = summary.get("paid_amount", 0.0)
+        p_date = summary.get("payment_date_str", "")
+        p_mode = summary.get("payment_method", "Cash")
+        rem_bal = summary.get("remaining_balance", 0.0)
+        net_val = summary.get("net_payable", 0.0)
+
+        if is_st or (rem_bal <= 0 and paid_val > 0):
+            lbl_text = "✓ FULLY SETTLED"
+            if p_date:
+                lbl_text += f" • {p_date}"
+            self.lbl_hist_settle_badge.setText(lbl_text)
+            self.lbl_hist_settle_badge.setStyleSheet("""
+                background: #ECFDF5; color: #059669; border: 1px solid #A7F3D0;
+                font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 6px;
+            """)
+            self.lbl_hist_settle_badge.setToolTip(f"Paid in full: {_money(paid_val)} on {p_date} via {p_mode}")
+            self.lbl_hist_settle_badge.setVisible(True)
+        elif paid_val > 0:
+            self.lbl_hist_settle_badge.setText(f"⚡ PARTIAL (₹ {rem_bal:,.0f} DUE)")
+            self.lbl_hist_settle_badge.setStyleSheet("""
+                background: #FEF3C7; color: #D97706; border: 1px solid #FDE68A;
+                font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 6px;
+            """)
+            self.lbl_hist_settle_badge.setToolTip(f"Paid {_money(paid_val)}, Remaining Due: {_money(rem_bal)}")
+            self.lbl_hist_settle_badge.setVisible(True)
+        else:
+            self.lbl_hist_settle_badge.setText("⏳ PAYMENT PENDING")
+            self.lbl_hist_settle_badge.setStyleSheet("""
+                background: #FEE2E2; color: #DC2626; border: 1px solid #FECACA;
+                font-size: 11px; font-weight: 800; padding: 4px 10px; border-radius: 6px;
+            """)
+            self.lbl_hist_settle_badge.setToolTip(f"Pending payout: {_money(net_val)}")
+            self.lbl_hist_settle_badge.setVisible(True)
+
         self._update_hist_footer(
             summary["total_units"],
             summary["full_days"],
@@ -2810,9 +4042,15 @@ class WorkersPage(BasePage):
             summary["total_travel"],
             summary["total_advance"],
             summary["net_payable"],
+            is_settled=is_st,
+            paid_amount=paid_val,
+            payment_date_str=p_date,
         )
 
-    def _update_hist_footer(self, units, full, half, dedhi, double, absent, earning, travel=0.0, advance=0.0, net_payable=0.0):
+    def _update_hist_footer(
+        self, units, full, half, dedhi, double, absent, earning, travel=0.0, advance=0.0, net_payable=0.0,
+        is_settled=False, paid_amount=0.0, payment_date_str=""
+    ):
         self.lbl_hf_units.setText(f"Total Units: <b>{units:.1f} D</b>")
         self.lbl_hf_full.setText(f"Full: <b>{full}</b>")
         self.lbl_hf_half.setText(f"Half: <b>{half}</b>")
@@ -2822,7 +4060,17 @@ class WorkersPage(BasePage):
         self.lbl_hf_earning.setText(_money(earning))
         self.lbl_hf_travel.setText(f"+ {_money(travel)}")
         self.lbl_hf_advances.setText(f"- {_money(advance)}")
-        self.lbl_hf_net.setText(_money(net_payable))
+        if is_settled or (paid_amount >= net_payable and net_payable > 0):
+            date_txt = f" ({payment_date_str})" if payment_date_str else ""
+            self.lbl_hist_net_title.setText(f"✓ PAID{date_txt}:")
+            self.lbl_hist_net_title.setStyleSheet("font-size: 11px; font-weight: 800; color: #A7F3D0; letter-spacing: 0.5px;")
+            self.lbl_hf_net.setText(_money(paid_amount or net_payable))
+            self.f_hf_net.setStyleSheet("background: #065F46; border-radius: 6px; padding: 5px 14px;")
+        else:
+            self.lbl_hist_net_title.setText("FINAL NET PAYABLE:")
+            self.lbl_hist_net_title.setStyleSheet("font-size: 11px; font-weight: 700; color: #F59E0B; letter-spacing: 0.5px;")
+            self.lbl_hf_net.setText(_money(net_payable))
+            self.f_hf_net.setStyleSheet("background: #173560; border-radius: 6px; padding: 5px 14px;")
 
     def _copy_whatsapp_summary(self):
         worker_id = self.cb_hist_worker.currentData() if self.tabs.currentIndex() == 2 else self.cb_pay_worker.currentData()
@@ -2867,75 +4115,357 @@ class WorkersPage(BasePage):
         month = self.cb_pay_month.currentData() or date.today().month
 
         if not worker_id:
+            self.lbl_sc_header_name.setText("Monthly Salary Statement")
+            self.lbl_sc_header_month.setText("Select a worker and month from toolbar")
+            self.lbl_sc_status.setText("NO SELECTION")
+            self.lbl_sc_status.setStyleSheet("""
+                background: #F1F5F9; color: #64748B; font-size: 10px; font-weight: 800;
+                border-radius: 4px; padding: 4px 8px; border: 1px solid #CBD5E1;
+            """)
+            self.table_advances.setRowCount(0)
+            self.table_travel.setRowCount(0)
+            self.table_adjustments.setRowCount(0)
+            self.table_settle_hist.setRowCount(0)
+            self.lbl_subtab_adv_total.setText("Total Advances: ₹ 0.00")
+            self.lbl_subtab_trv_total.setText("Total Travel: ₹ 0.00")
+            self.lbl_subtab_adj_total.setText("Net Adjustments: ₹ 0.00")
             return
 
         summary = worker_service.get_worker_monthly_summary(worker_id, year, month)
         if not summary:
             return
 
-        # Advances
+        # ── 1. Card Header & Status ──────────────────────────────────────────
+        self.lbl_sc_header_name.setText(f"{summary['name']}  •  {summary['work_type']}")
+        self.lbl_sc_header_month.setText(
+            f"{summary['month_name']} {summary['year']} Statement  |  Daily Rate: ₹ {summary['current_daily_rate']:,.0f}"
+        )
+
+        net_val = summary["net_payable"]
+        paid_val = summary["paid_amount"]
+        rem_val = summary["remaining_balance"]
+        is_settled = summary["is_settled"]
+
+        if is_settled or (paid_val >= net_val and net_val > 0):
+            self.lbl_sc_status.setText("✓ FULLY SETTLED")
+            self.lbl_sc_status.setStyleSheet("""
+                background: #DCFCE7; color: #15803D; font-size: 10px; font-weight: 800;
+                border-radius: 4px; padding: 4px 10px; border: 1px solid #86EFAC;
+            """)
+        elif paid_val > 0:
+            self.lbl_sc_status.setText(f"⚡ PARTIAL (₹ {rem_val:,.0f} DUE)")
+            self.lbl_sc_status.setStyleSheet("""
+                background: #FEF3C7; color: #B45309; font-size: 10px; font-weight: 800;
+                border-radius: 4px; padding: 4px 10px; border: 1px solid #FCD34D;
+            """)
+        else:
+            self.lbl_sc_status.setText("⏳ PENDING PAYMENT")
+            self.lbl_sc_status.setStyleSheet("""
+                background: #FEE2E2; color: #B91C1C; font-size: 10px; font-weight: 800;
+                border-radius: 4px; padding: 4px 10px; border: 1px solid #FCA5A5;
+            """)
+
+        # ── Clean up existing cell widgets to prevent orphans ───────────────
+        for tbl in (self.table_advances, self.table_travel, self.table_adjustments, self.table_settle_hist):
+            tbl.clearSpans()
+            for r in range(tbl.rowCount()):
+                for c in range(tbl.columnCount()):
+                    cw = tbl.cellWidget(r, c)
+                    if cw:
+                        tbl.removeCellWidget(r, c)
+                        cw.setParent(None)
+                        cw.deleteLater()
+            tbl.clearContents()
+            tbl.setRowCount(0)
+
+        # Helper: Create styled action cell
+        def _make_action_widget(on_delete_fn, tip="Delete record"):
+            act_w = QWidget()
+            act_l = QHBoxLayout(act_w)
+            act_l.setContentsMargins(0, 0, 0, 0)
+            act_l.setAlignment(Qt.AlignCenter)
+            b = QPushButton("🗑")
+            b.setCursor(Qt.PointingHandCursor)
+            b.setToolTip(tip)
+            b.setFixedSize(28, 26)
+            b.setFont(QFont("Segoe UI Emoji", 11))
+            b.setStyleSheet("""
+                QPushButton {
+                    background: #FEF2F2; color: #DC2626; border: 1px solid #FECACA;
+                    border-radius: 4px; font-size: 11px;
+                }
+                QPushButton:hover {
+                    background: #DC2626; color: #FFFFFF; border: 1px solid #DC2626;
+                }
+            """)
+            b.clicked.connect(on_delete_fn)
+            act_l.addWidget(b)
+            return act_w
+
+        # ── 2. Advances Table ────────────────────────────────────────────────
         advs = summary.get("advances", [])
-        self.table_advances.setRowCount(len(advs))
-        for r, a in enumerate(advs):
-            self.table_advances.setRowHeight(r, 34)
-            self.table_advances.setItem(r, 0, QTableWidgetItem(a["date_str"]))
-            self.table_advances.setItem(r, 1, QTableWidgetItem(_money(a["amount"])))
-            self.table_advances.setItem(r, 2, QTableWidgetItem(a["payment_method"]))
-            self.table_advances.setItem(r, 3, QTableWidgetItem(a["notes"]))
+        self.lbl_subtab_adv_total.setText(f"Total Advances: {_money(summary['total_advance'])}  ({len(advs)} records)")
+        if not advs:
+            self.table_advances.setRowCount(1)
+            self.table_advances.setRowHeight(0, 48)
+            self.table_advances.setSpan(0, 0, 1, self.table_advances.columnCount())
+            empty_it = QTableWidgetItem("ℹ  No advance payments recorded for this worker in this month.")
+            empty_it.setTextAlignment(Qt.AlignCenter)
+            empty_it.setForeground(QColor("#94A3B8"))
+            empty_it.setFont(QFont("Segoe UI", 10))
+            self.table_advances.setItem(0, 0, empty_it)
+        else:
+            self.table_advances.setRowCount(len(advs))
+            for r, a in enumerate(advs):
+                self.table_advances.setRowHeight(r, 38)
+                # Date
+                d_it = QTableWidgetItem(a["date_str"])
+                d_it.setTextAlignment(Qt.AlignCenter)
+                d_it.setFont(QFont("Segoe UI", 10))
+                self.table_advances.setItem(r, 0, d_it)
+                # Amount
+                amt_it = QTableWidgetItem(f"- {_money(a['amount'])}")
+                amt_it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                amt_it.setForeground(QColor("#DC2626"))
+                amt_it.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                self.table_advances.setItem(r, 1, amt_it)
+                # Method
+                m_it = QTableWidgetItem(a.get("payment_method") or "Cash")
+                m_it.setTextAlignment(Qt.AlignCenter)
+                m_it.setFont(QFont("Segoe UI", 10))
+                self.table_advances.setItem(r, 2, m_it)
+                # Notes
+                n_it = QTableWidgetItem(a.get("notes") or "—")
+                n_it.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                n_it.setFont(QFont("Segoe UI", 10))
+                n_it.setToolTip(a.get("notes") or "")
+                self.table_advances.setItem(r, 3, n_it)
+                # Action
+                act_w = _make_action_widget(lambda _=False, a_id=a["id"]: self._delete_advance(a_id), "Delete this advance")
+                self.table_advances.setCellWidget(r, 4, act_w)
 
-            del_btn = QPushButton("🗑")
-            del_btn.setStyleSheet("color: #DC2626; background: transparent; border: none; font-weight: 700;")
-            del_btn.clicked.connect(lambda _=False, a_id=a["id"]: self._delete_advance(a_id))
-            self.table_advances.setCellWidget(r, 4, del_btn)
-
-        # Travel Expenses
+        # ── 3. Travel Expenses Table ─────────────────────────────────────────
         exps = summary.get("travel_expenses", [])
-        self.table_travel.setRowCount(len(exps))
-        for r, e in enumerate(exps):
-            self.table_travel.setRowHeight(r, 34)
-            self.table_travel.setItem(r, 0, QTableWidgetItem(e["date_str"]))
-            self.table_travel.setItem(r, 1, QTableWidgetItem(_money(e["amount"])))
-            self.table_travel.setItem(r, 2, QTableWidgetItem(e["category"]))
-            self.table_travel.setItem(r, 3, QTableWidgetItem(e["notes"]))
+        self.lbl_subtab_trv_total.setText(f"Total Travel: {_money(summary['total_travel'])}  ({len(exps)} records)")
+        if not exps:
+            self.table_travel.setRowCount(1)
+            self.table_travel.setRowHeight(0, 48)
+            self.table_travel.setSpan(0, 0, 1, self.table_travel.columnCount())
+            empty_it = QTableWidgetItem("ℹ  No travel or conveyance expenses recorded for this month.")
+            empty_it.setTextAlignment(Qt.AlignCenter)
+            empty_it.setForeground(QColor("#94A3B8"))
+            empty_it.setFont(QFont("Segoe UI", 10))
+            self.table_travel.setItem(0, 0, empty_it)
+        else:
+            self.table_travel.setRowCount(len(exps))
+            for r, e in enumerate(exps):
+                self.table_travel.setRowHeight(r, 38)
+                # Date
+                d_it = QTableWidgetItem(e["date_str"])
+                d_it.setTextAlignment(Qt.AlignCenter)
+                d_it.setFont(QFont("Segoe UI", 10))
+                self.table_travel.setItem(r, 0, d_it)
+                # Amount
+                amt_it = QTableWidgetItem(f"+ {_money(e['amount'])}")
+                amt_it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                amt_it.setForeground(QColor("#059669"))
+                amt_it.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                self.table_travel.setItem(r, 1, amt_it)
+                # Category
+                c_it = QTableWidgetItem(e.get("category") or "Travel")
+                c_it.setTextAlignment(Qt.AlignCenter)
+                c_it.setFont(QFont("Segoe UI", 10))
+                self.table_travel.setItem(r, 2, c_it)
+                # Notes
+                n_it = QTableWidgetItem(e.get("notes") or "—")
+                n_it.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                n_it.setFont(QFont("Segoe UI", 10))
+                n_it.setToolTip(e.get("notes") or "")
+                self.table_travel.setItem(r, 3, n_it)
+                # Action
+                act_w = _make_action_widget(lambda _=False, e_id=e["id"]: self._delete_travel(e_id), "Delete this travel expense")
+                self.table_travel.setCellWidget(r, 4, act_w)
 
-            del_btn = QPushButton("🗑")
-            del_btn.setStyleSheet("color: #DC2626; background: transparent; border: none; font-weight: 700;")
-            del_btn.clicked.connect(lambda _=False, e_id=e["id"]: self._delete_travel(e_id))
-            self.table_travel.setCellWidget(r, 4, del_btn)
-
-        # Adjustments
+        # ── 4. Adjustments Table ─────────────────────────────────────────────
         adjs = summary.get("adjustments", [])
-        self.table_adjustments.setRowCount(len(adjs))
-        for r, adj in enumerate(adjs):
-            self.table_adjustments.setRowHeight(r, 34)
-            self.table_adjustments.setItem(r, 0, QTableWidgetItem(adj["date_str"]))
-            self.table_adjustments.setItem(r, 1, QTableWidgetItem(adj["type"]))
-            self.table_adjustments.setItem(r, 2, QTableWidgetItem(adj["category"]))
-            self.table_adjustments.setItem(r, 3, QTableWidgetItem(_money(adj["amount"])))
-            self.table_adjustments.setItem(r, 4, QTableWidgetItem(adj["notes"]))
+        net_adj = summary['total_additions'] - summary['total_deductions']
+        sign_str = "+" if net_adj >= 0 else "-"
+        self.lbl_subtab_adj_total.setText(
+            f"Additions: +{_money(summary['total_additions'])} | Deductions: -{_money(summary['total_deductions'])}  (Net: {sign_str}{_money(abs(net_adj))})"
+        )
+        if not adjs:
+            self.table_adjustments.setRowCount(1)
+            self.table_adjustments.setRowHeight(0, 48)
+            self.table_adjustments.setSpan(0, 0, 1, self.table_adjustments.columnCount())
+            empty_it = QTableWidgetItem("ℹ  No special bonuses, penalties, or adjustments recorded for this month.")
+            empty_it.setTextAlignment(Qt.AlignCenter)
+            empty_it.setForeground(QColor("#94A3B8"))
+            empty_it.setFont(QFont("Segoe UI", 10))
+            self.table_adjustments.setItem(0, 0, empty_it)
+        else:
+            self.table_adjustments.setRowCount(len(adjs))
+            for r, adj in enumerate(adjs):
+                self.table_adjustments.setRowHeight(r, 38)
+                # Date
+                d_it = QTableWidgetItem(adj["date_str"])
+                d_it.setTextAlignment(Qt.AlignCenter)
+                d_it.setFont(QFont("Segoe UI", 10))
+                self.table_adjustments.setItem(r, 0, d_it)
+                # Type badge
+                is_add = (adj["type"] == "ADDITION")
+                t_it = QTableWidgetItem("+ Add" if is_add else "- Ded")
+                t_it.setTextAlignment(Qt.AlignCenter)
+                t_it.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                t_it.setForeground(QColor("#059669" if is_add else "#DC2626"))
+                self.table_adjustments.setItem(r, 1, t_it)
+                # Category
+                c_it = QTableWidgetItem(adj.get("category") or "General")
+                c_it.setTextAlignment(Qt.AlignCenter)
+                c_it.setFont(QFont("Segoe UI", 10))
+                self.table_adjustments.setItem(r, 2, c_it)
+                # Amount
+                amt_it = QTableWidgetItem((f"+ {_money(adj['amount'])}" if is_add else f"- {_money(adj['amount'])}"))
+                amt_it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                amt_it.setForeground(QColor("#059669" if is_add else "#DC2626"))
+                amt_it.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                self.table_adjustments.setItem(r, 3, amt_it)
+                # Notes
+                n_it = QTableWidgetItem(adj.get("notes") or "—")
+                n_it.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                n_it.setFont(QFont("Segoe UI", 10))
+                n_it.setToolTip(adj.get("notes") or "")
+                self.table_adjustments.setItem(r, 4, n_it)
+                # Action
+                act_w = _make_action_widget(lambda _=False, adj_id=adj["id"]: self._delete_adjustment(adj_id), "Delete this adjustment")
+                self.table_adjustments.setCellWidget(r, 5, act_w)
 
-            del_btn = QPushButton("🗑")
-            del_btn.setStyleSheet("color: #DC2626; background: transparent; border: none; font-weight: 700;")
-            del_btn.clicked.connect(lambda _=False, adj_id=adj["id"]: self._delete_adjustment(adj_id))
-            self.table_adjustments.setCellWidget(r, 5, del_btn)
+        # ── 4. Settlement History Table (All Recorded Months) ────────────────
+        hist_list = worker_service.get_worker_settlement_history(worker_id)
+        if not hist_list:
+            self.table_settle_hist.setRowCount(1)
+            self.table_settle_hist.setRowHeight(0, 48)
+            self.table_settle_hist.setSpan(0, 0, 1, self.table_settle_hist.columnCount())
+            empty_it = QTableWidgetItem("ℹ  No settlement payments recorded yet for this worker.")
+            empty_it.setTextAlignment(Qt.AlignCenter)
+            empty_it.setForeground(QColor("#94A3B8"))
+            empty_it.setFont(QFont("Segoe UI", 10))
+            self.table_settle_hist.setItem(0, 0, empty_it)
+            self.lbl_subtab_shist_total.setText("Settlement History: 0 records")
+        else:
+            self.lbl_subtab_shist_total.setText(f"Settlement History: {len(hist_list)} recorded months")
+            self.table_settle_hist.setRowCount(len(hist_list))
+            for r, h in enumerate(hist_list):
+                self.table_settle_hist.setRowHeight(r, 38)
+                # Col 0: Month
+                it0 = QTableWidgetItem(h["month_label"])
+                it0.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+                it0.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                self.table_settle_hist.setItem(r, 0, it0)
 
-        # Settlement Card numbers
+                # Col 1: Days Worked
+                it1 = QTableWidgetItem(f"{h['total_units']:.1f} Days")
+                it1.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+                self.table_settle_hist.setItem(r, 1, it1)
+
+                # Col 2: Work Earning
+                it2 = QTableWidgetItem(_money(h['total_work_earning']))
+                it2.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                self.table_settle_hist.setItem(r, 2, it2)
+
+                # Col 3: Advances (-)
+                it3 = QTableWidgetItem(f"- {_money(h['total_advances'])}")
+                it3.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                it3.setForeground(QColor("#DC2626"))
+                self.table_settle_hist.setItem(r, 3, it3)
+
+                # Col 4: Paid Amount
+                it4 = QTableWidgetItem(_money(h['paid_amount']))
+                it4.setTextAlignment(Qt.AlignVCenter | Qt.AlignRight)
+                it4.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                it4.setForeground(QColor("#047857"))
+                self.table_settle_hist.setItem(r, 4, it4)
+
+                # Col 5: Payment Date
+                it5 = QTableWidgetItem(h['payment_date_str'])
+                it5.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+                self.table_settle_hist.setItem(r, 5, it5)
+
+                # Col 6: Mode
+                it6 = QTableWidgetItem(h['payment_method'])
+                it6.setTextAlignment(Qt.AlignVCenter | Qt.AlignCenter)
+                self.table_settle_hist.setItem(r, 6, it6)
+
+                # Col 7: Status Badge
+                st_w = QWidget()
+                st_l = QHBoxLayout(st_w)
+                st_l.setContentsMargins(0, 0, 0, 0)
+                st_l.setAlignment(Qt.AlignCenter)
+                st_lbl = QLabel("✓ PAID" if h['is_settled'] else "⏳ PARTIAL")
+                st_lbl.setStyleSheet("""
+                    background: #DCFCE7; color: #15803D; font-size: 10px; font-weight: 800;
+                    border-radius: 4px; padding: 2px 6px; border: 1px solid #86EFAC;
+                """)
+                st_l.addWidget(st_lbl)
+                self.table_settle_hist.setCellWidget(r, 7, st_w)
+
+        # ── 5. Settlement Statement Card Values & Subtexts ───────────────────
+        # Earnings
         self.lbl_sc_work.setText(_money(summary["total_work_earning"]))
+        self.lbl_sc_work_sub.setText(f"{summary['total_units']:.1f} days worked × ₹ {summary['current_daily_rate']:,.0f}")
+
         self.lbl_sc_travel.setText(f"+ {_money(summary['total_travel'])}")
+        self.lbl_sc_travel_sub.setText(f"{len(exps)} travel reimbursement items")
+
         self.lbl_sc_add.setText(f"+ {_money(summary['total_additions'])}")
+        num_adds = len([x for x in adjs if x.get("type") == "ADDITION"])
+        self.lbl_sc_add_sub.setText(f"{num_adds} bonus / allowance items")
+
         self.lbl_sc_gross.setText(_money(summary["gross_payable"]))
+
+        # Deductions
         self.lbl_sc_adv.setText(f"- {_money(summary['total_advance'])}")
+        self.lbl_sc_adv_sub.setText(f"{len(advs)} advance payments given")
+
         self.lbl_sc_ded.setText(f"- {_money(summary['total_deductions'])}")
+        num_deds = len([x for x in adjs if x.get("type") == "DEDUCTION"])
+        self.lbl_sc_ded_sub.setText(f"{num_deds} penalty / adjustment items")
+
+        tot_ded = summary["total_advance"] + summary["total_deductions"]
+        self.lbl_sc_tot_ded.setText(f"- {_money(tot_ded)}")
+
+        # Net Hero
         self.lbl_sc_net.setText(_money(summary["net_payable"]))
+        self.lbl_sc_net_sub.setText(
+            f"Net payable after subtracting {_money(tot_ded)} total deductions"
+        )
+
+        # Payment & Due
         self.lbl_sc_paid.setText(_money(summary["paid_amount"]))
         self.lbl_sc_rem.setText(_money(summary["remaining_balance"]))
-
-        if summary["is_settled"]:
-            self.btn_settle_action.setText("✓ Month Settled (Update Payment)")
-            self.btn_settle_action.setStyleSheet("background: #059669; color: white; font-weight: 700; border-radius: 6px; padding: 10px; font-size: 13px;")
+        if summary["remaining_balance"] <= 0:
+            self.lbl_sc_rem.setStyleSheet("font-size: 13px; color: #059669; font-weight: 900; border: none; background: transparent;")
         else:
-            self.btn_settle_action.setText("💰 Settle Month / Record Payment")
-            self.btn_settle_action.setStyleSheet("background: #173560; color: white; font-weight: 700; border-radius: 6px; padding: 10px; font-size: 13px;")
+            self.lbl_sc_rem.setStyleSheet("font-size: 13px; color: #DC2626; font-weight: 900; border: none; background: transparent;")
+
+        # Action button style
+        if is_settled:
+            self.btn_settle_action.setText("✓   Month Settled (Update Payment)")
+            self.btn_settle_action.setStyleSheet("""
+                QPushButton {
+                    background: #059669; color: #FFFFFF; font-weight: 800;
+                    border: none; border-radius: 8px; font-size: 13px;
+                }
+                QPushButton:hover { background: #047857; }
+            """)
+        else:
+            self.btn_settle_action.setText("💰   Settle Month / Record Payment")
+            self.btn_settle_action.setStyleSheet("""
+                QPushButton {
+                    background: #173560; color: #FFFFFF; font-weight: 800;
+                    border: none; border-radius: 8px; font-size: 13px;
+                }
+                QPushButton:hover { background: #0F2342; }
+            """)
 
     def _open_advance_dialog(self):
         workers = worker_service.get_workers(is_active=True)
@@ -3013,20 +4543,24 @@ class WorkersPage(BasePage):
         if not summary:
             return
 
-        dlg = SettlementDialog(self, summary=summary)
+        dlg = SettlementDialog(self, summary=summary, worker_id=worker_id)
         if dlg.exec() == QDialog.Accepted:
             data = dlg.get_data()
-            worker_service.record_settlement(
+            st = worker_service.record_full_payment_done(
                 worker_id=worker_id,
-                year=year,
-                month=month,
+                end_date=data.get("end_date"),
                 paid_amount=data["paid_amount"],
                 payment_method=data["method"],
                 notes=data["notes"],
+                start_date=data.get("start_date"),
             )
             self._load_settlement_data()
+            self._load_directory_data()
+            self._load_monthly_history_data()
+            self._load_daily_attendance_data()
+            self._load_payment_done_data()
             self._load_kpis()
-            show_toast(self, f"Settlement recorded for {summary['name']}", "success")
+            show_toast(self, f"Payment confirmed: Voucher #{st.voucher_no} for {summary['name']}", "success")
 
     def _delete_advance(self, advance_id: int):
         ret = QMessageBox.question(self, "Confirm Delete", "Delete this advance record?", QMessageBox.Yes | QMessageBox.No)

@@ -200,7 +200,10 @@ def _post_json(url: str, body: dict[str, Any], timeout: float = 10.0) -> dict[st
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
+            try:
+                payload = json.loads(resp.read().decode("utf-8"))
+            except (ValueError, UnicodeDecodeError) as parse_err:
+                raise LicenseError("Invalid response from the license server.") from parse_err
     except urllib.error.HTTPError as exc:
         logger.warning("License server HTTP %s from %s", exc.code, url)
         try:

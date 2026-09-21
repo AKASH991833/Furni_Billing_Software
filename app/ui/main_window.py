@@ -52,24 +52,25 @@ class MainWindow(QMainWindow):
         right.addWidget(self.stack, 1)
         root_layout.addLayout(right, 1)
 
-        # Build pages
-        self.pages = {
-            "dashboard": DashboardPage(self),
-            "customers": CustomersPage(self),
-            "invoices": InvoicesPage(self),
-            "workers": WorkersPage(self),
-            "reports": ReportsPage(self),
-            "settings": SettingsPage(self),
+        # Lazy page factories (instantiated on-demand on first visit)
+        self._page_factories = {
+            "dashboard": lambda: DashboardPage(self),
+            "customers": lambda: CustomersPage(self),
+            "invoices": lambda: InvoicesPage(self),
+            "workers": lambda: WorkersPage(self),
+            "reports": lambda: ReportsPage(self),
+            "settings": lambda: SettingsPage(self),
         }
-        for page in self.pages.values():
-            self.stack.addWidget(page)
+        self.pages: dict[str, QWidget] = {}
 
+        # Build only initial landing page (dashboard) on startup
+        dash_page = self._get_or_create_page("dashboard")
         self.sidebar.set_active("dashboard")
         self.header.set_title("Home", "Welcome back")
         self._current = "dashboard"
 
-        # Trigger the first show so dashboard data loads immediately on startup
-        self.pages["dashboard"].on_show()
+        # Trigger initial dashboard load
+        dash_page.on_show()
 
         # React to profile/settings changes in real time so nothing stays stale
         # until restart — mirrors web auto-reload after a settings save.
@@ -90,8 +91,20 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001, S110
             pass
 
+    def _get_or_create_page(self, key: str):
+        """Lazily build and cache a page when first navigated to."""
+        if key in self.pages:
+            return self.pages[key]
+        factory = self._page_factories.get(key)
+        if factory:
+            page = factory()
+            self.pages[key] = page
+            self.stack.addWidget(page)
+            return page
+        return None
+
     def _navigate(self, key: str):
-        page = self.pages.get(key)
+        page = self._get_or_create_page(key)
         if page is None:
             return
         self.stack.setCurrentWidget(page)
@@ -123,10 +136,20 @@ class MainWindow(QMainWindow):
         Toast(self, message, kind)
 
     def show_page(self, key: str):
-        if key in self.pages:
+        if key in self._page_factories or key in self.pages:
+            self.sidebar.set_active(key)
             self._navigate(key)
 
     def refresh_current(self):
         page = self.pages.get(self._current)
         if page is not None:
             page.refresh()
+
+    def refresh_all(self):
+        """Refresh all instantiated pages across the entire application."""
+        for page in list(self.pages.values()):
+            if hasattr(page, "refresh"):
+                try:
+                    page.refresh()
+                except Exception:
+                    pass

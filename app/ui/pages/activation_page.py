@@ -152,31 +152,31 @@ class ActivationPage(QWidget):
         overlay_layout.setAlignment(Qt.AlignCenter)
         overlay_layout.setContentsMargins(0, 0, 0, 0)
 
-        self._card = QFrame()
-        self._card.setFixedSize(450, 580)
+        self._card = QFrame(self._overlay)
+        self._card.setFixedSize(460, 600)
         self._card.setObjectName("activationCard")
         self._card.setStyleSheet(_CARD_STYLE)
         shadow = QGraphicsDropShadowEffect()
         shadow.setBlurRadius(60)
         shadow.setOffset(0, 10)
-        shadow.setColor(QColor(0, 0, 0, 120))
+        shadow.setColor(QColor(0, 0, 0, 140))
         self._card.setGraphicsEffect(shadow)
 
         self._card_layout = QVBoxLayout(self._card)
-        self._card_layout.setContentsMargins(36, 28, 36, 24)
+        self._card_layout.setContentsMargins(36, 26, 36, 24)
         self._card_layout.setSpacing(8)
 
         # Logo mark
-        logo = QLabel("\u2726")
+        logo = QLabel("🪑")
         logo.setFixedSize(56, 56)
         logo.setAlignment(Qt.AlignCenter)
         logo.setStyleSheet(
-            "background: rgba(199, 162, 75, 0.12); border: 1.5px solid rgba(199, 162, 75, 0.3);"
-            " border-radius: 14px; font-size: 26px; color: #C7A24B;"
+            "background: rgba(199, 162, 75, 0.15); border: 1.5px solid rgba(199, 162, 75, 0.35);"
+            " border-radius: 14px; font-size: 26px;"
         )
         self._card_layout.addWidget(logo, 0, Qt.AlignCenter)
 
-        self._card_layout.addSpacing(4)
+        self._card_layout.addSpacing(2)
 
         self._title = QLabel("Software Activation")
         self._title.setAlignment(Qt.AlignCenter)
@@ -187,7 +187,7 @@ class ActivationPage(QWidget):
         self._card_layout.addWidget(self._title)
 
         self._subtitle = QLabel(
-            "Internet connection is required for first activation."
+            "Please enter your license key to activate this computer."
         )
         self._subtitle.setAlignment(Qt.AlignCenter)
         self._subtitle.setWordWrap(True)
@@ -197,7 +197,7 @@ class ActivationPage(QWidget):
         )
         self._card_layout.addWidget(self._subtitle)
 
-        self._card_layout.addSpacing(6)
+        self._card_layout.addSpacing(4)
 
         divider = QFrame()
         divider.setFixedHeight(1)
@@ -208,14 +208,72 @@ class ActivationPage(QWidget):
         )
         self._card_layout.addWidget(divider)
 
-        self._card_layout.addSpacing(8)
+        self._card_layout.addSpacing(6)
 
-        key_label = QLabel("LICENSE KEY")
+        # Computer ID display
+        m_id = license_service.machine_id()
+        mid_label = QLabel("YOUR COMPUTER ID")
+        mid_label.setStyleSheet(
+            "font-size: 10.5px; font-weight: 700; color: rgba(199,162,75,0.7);"
+            " background: transparent; letter-spacing: 1.2px;"
+        )
+        self._card_layout.addWidget(mid_label)
+
+        mid_box = QWidget()
+        mid_layout = QHBoxLayout(mid_box)
+        mid_layout.setContentsMargins(0, 0, 0, 0)
+        mid_layout.setSpacing(6)
+
+        mid_display = QLineEdit(m_id)
+        mid_display.setReadOnly(True)
+        mid_display.setMinimumHeight(38)
+        mid_display.setStyleSheet("""
+            QLineEdit {
+                background: rgba(255, 255, 255, 0.04);
+                border: 1px solid rgba(199, 162, 75, 0.2);
+                border-radius: 8px;
+                color: rgba(255, 255, 255, 0.7);
+                font-family: monospace;
+                font-size: 12px;
+                padding: 4px 10px;
+            }
+        """)
+        mid_layout.addWidget(mid_display, 1)
+
+        btn_copy = QPushButton("📋")
+        btn_copy.setFixedSize(38, 38)
+        btn_copy.setCursor(Qt.PointingHandCursor)
+        btn_copy.setToolTip("Copy Computer ID")
+        btn_copy.setStyleSheet("""
+            QPushButton {
+                background: rgba(199, 162, 75, 0.15);
+                border: 1px solid rgba(199, 162, 75, 0.3);
+                border-radius: 8px;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background: rgba(199, 162, 75, 0.25);
+            }
+        """)
+        def _copy_mid():
+            from PySide6.QtGui import QGuiApplication
+            QGuiApplication.clipboard().setText(m_id)
+            btn_copy.setText("✓")
+            QTimer.singleShot(1500, lambda: btn_copy.setText("📋"))
+        btn_copy.clicked.connect(_copy_mid)
+        mid_layout.addWidget(btn_copy)
+
+        self._card_layout.addWidget(mid_box)
+
+        self._card_layout.addSpacing(6)
+
+        key_label = QLabel("ENTER ACTIVATION KEY")
         key_label.setStyleSheet(
-            "font-size: 11px; font-weight: 700; color: rgba(199,162,75,0.7);"
+            "font-size: 10.5px; font-weight: 700; color: rgba(199,162,75,0.7);"
             " background: transparent; letter-spacing: 1.2px;"
         )
         self._card_layout.addWidget(key_label)
+
 
         key_row = QWidget()
         key_layout = QHBoxLayout(key_row)
@@ -286,6 +344,8 @@ class ActivationPage(QWidget):
         )
         self._card_layout.addWidget(self._status_label)
 
+        overlay_layout.addWidget(self._card, 0, Qt.AlignCenter)
+
     # ---- Behavior ----
 
     def _on_text_changed(self):
@@ -310,7 +370,7 @@ class ActivationPage(QWidget):
 
         self._busy = True
         self._btn_activate.setEnabled(False)
-        self._status_label.setText("Activating\u2026 please wait.")
+        self._status_label.setText("Activating… please wait.")
         self._status_label.setStyleSheet(
             "font-size: 10px; color: rgba(199,162,75,0.8); background: transparent;"
         )
@@ -339,39 +399,39 @@ class ActivationPage(QWidget):
         size = self.size()
         self._bg.setGeometry(0, 0, size.width(), size.height())
         self._overlay.setGeometry(0, 0, size.width(), size.height())
-        card_size = self._card.size()
-        x = (size.width() - card_size.width()) // 2
-        y = (size.height() - card_size.height()) // 2
-        self._card.move(x, y)
 
     def showEvent(self, event):
         super().showEvent(event)
         if not self._animation_started:
             self._animation_started = True
-            QTimer.singleShot(0, self._run_entrance_animation)
+            QTimer.singleShot(50, self._run_entrance_animation)
         self.f_key.setFocus()
 
     def _run_entrance_animation(self):
-        card = self._card
-        if card.width() <= 0 or self.width() <= 0:
-            centered_x = (self.width() - card.width()) // 2
-            centered_y = (self.height() - card.height()) // 2
-        else:
-            centered_x = (self.width() - card.width()) // 2
-            centered_y = (self.height() - card.height()) // 2
+        size = self.size()
+        card_size = self._card.size()
+        centered_x = (size.width() - card_size.width()) // 2
+        centered_y = (size.height() - card_size.height()) // 2
 
-        opacity = QGraphicsOpacityEffect(card)
-        card.setGraphicsEffect(opacity)
-        fade = QPropertyAnimation(opacity, b"opacity", self)
-        fade.setDuration(450)
-        fade.setStartValue(0.0)
-        fade.setEndValue(1.0)
-        fade.setEasingCurve(QEasingCurve.OutCubic)
-        fade.start(QPropertyAnimation.DeleteWhenStopped)
+        start_pos = QPoint(centered_x, centered_y + 30)
+        end_pos = QPoint(centered_x, centered_y)
+        self._card.move(start_pos)
 
-        slide = QPropertyAnimation(card, b"pos", self)
-        slide.setDuration(450)
-        slide.setStartValue(QPoint(centered_x, centered_y + 30))
-        slide.setEndValue(QPoint(centered_x, centered_y))
-        slide.setEasingCurve(QEasingCurve.OutCubic)
-        slide.start(QPropertyAnimation.DeleteWhenStopped)
+        self._card_opacity = QGraphicsOpacityEffect(self._card)
+        self._card_opacity.setOpacity(0.0)
+        self._card.setGraphicsEffect(self._card_opacity)
+
+        self._fade_anim = QPropertyAnimation(self._card_opacity, b"opacity")
+        self._fade_anim.setDuration(450)
+        self._fade_anim.setStartValue(0.0)
+        self._fade_anim.setEndValue(1.0)
+        self._fade_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        self._slide_anim = QPropertyAnimation(self._card, b"pos")
+        self._slide_anim.setDuration(450)
+        self._slide_anim.setStartValue(start_pos)
+        self._slide_anim.setEndValue(end_pos)
+        self._slide_anim.setEasingCurve(QEasingCurve.OutCubic)
+
+        self._fade_anim.start()
+        self._slide_anim.start()

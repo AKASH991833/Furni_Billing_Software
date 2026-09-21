@@ -122,12 +122,13 @@ def customer_totals(customer_id: int) -> dict:
             .filter(Invoice.customer_id == customer_id, Invoice.status != "DRAFT")
             .scalar() or 0
         )
-        total_invoiced_f = float(total_invoiced)
-        total_paid_f = float(total_paid)
+        total_invoiced_f = round(float(total_invoiced), 2)
+        total_paid_f = round(float(total_paid), 2)
+        outstanding_f = round(max(total_invoiced_f - total_paid_f, 0.0), 2)
         result = {
             "total_invoiced": total_invoiced_f,
             "total_paid": total_paid_f,
-            "outstanding": total_invoiced_f - total_paid_f,
+            "outstanding": outstanding_f,
             "invoice_count": int(invoice_count),
         }
         cache.set(cache_key, result, ttl=30)
